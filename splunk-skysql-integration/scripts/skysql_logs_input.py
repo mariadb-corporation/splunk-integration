@@ -424,8 +424,7 @@ def main():
                             'serverDataSourceId': log.get('serverDataSourceId')
                         }
                     }
-                    #print(json.dumps(event))
-                    sys.stdout.flush()
+                    print(json.dumps(event), flush=True)
                     total_lines_output += 1
             else:
                 print(f"WARNING: Failed to fetch archive for log IDs: {log_id}", file=sys.stderr)
