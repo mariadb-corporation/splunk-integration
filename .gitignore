@@ -1,0 +1,51 @@
+# OS / editor
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+ENV/
+env/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs / runtime artifacts
+*.log
+
+# Splunk runtime/state (do not commit)
+skysql_checkpoint.json
+*checkpoint*.json
+
+# Common Splunk generated dirs (if you ever copy UF app layout into the repo)
+local/
+metadata/local.meta
+fishbucket/
+var/
+etc/
+opt/
+
+# Secrets / env files
+.env
+.env.*
+*.pem
+*.key
+*.crt
