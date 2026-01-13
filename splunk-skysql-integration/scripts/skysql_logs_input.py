@@ -386,59 +386,57 @@ def main():
         # print(f"INFO: Fetched {len(logs)} log files for time range {from_date} to {to_date}", file=sys.stderr)
         if not logs:
             print(f"INFO: No logs found for time range {from_date} to {to_date}", file=sys.stderr)
-            break
-        
-        for log in logs:
-            if log.get('logType') == 'slow-query-log':
-                # TODO: Handle slow-query-log separately
-                continue
-            log_id = log.get('id')
-            # print(f"INFO: Fetching archive for {log_id}, logType {log.get('logType')}", file=sys.stderr)
-            
-            # Fetch archive for these log IDs
-            archive_content = fetch_log_archive(log_id)
-            
-            if archive_content:
-                # Parse the archive and extract log lines
-                # For now, use the first log's logType as default for all lines in the archive
-                log_type = log.get('logType')
-                log_lines, last_timestamp = parse_log_archive(archive_content, log_type=log_type, last_timestamp=log_stat.get(log_id, {}).get('last_timestamp', 0))
+        else:
+            for log in logs:
+                if log.get('logType') == 'slow-query-log':
+                    # TODO: Handle slow-query-log separately
+                    continue
+                log_id = log.get('id')
+                # print(f"INFO: Fetching archive for {log_id}, logType {log.get('logType')}", file=sys.stderr)
                 
-                update_log_stat(log_stat, log_id, last_timestamp)
-                    
-                print(f"INFO: Extracted {len(log_lines)} log lines from archive {log_id}, file name {log.get('name')}", file=sys.stderr)
+                # Fetch archive for these log IDs
+                archive_content = fetch_log_archive(log_id)
                 
-                # Output each log line to stdout in JSON format for Splunk
-                for log_line in log_lines:                    
-                    event = {
-                        'time': log_line.get('timestamp', to_date),
-                        'source': 'skysql_logs_archive',
-                        'sourcetype': 'skysql:logs:archive',
-                        'event': {
-                            'message': log_line.get('message'),
-                            'filename': log_line.get('filename'),
-                            'logType': log_type,
-                            'log.level': log_line.get('log.level'),
-                            'server': log.get('server'),
-                            'service': log.get('service'),
-                            'serverDataSourceId': log.get('serverDataSourceId')
-                        }
-                    }
-                    print(json.dumps(event), flush=True)
-                    total_lines_output += 1
-            else:
-                print(f"WARNING: Failed to fetch archive for log IDs: {log_id}", file=sys.stderr)
-        
-        # Save checkpoint
-        save_checkpoint(from_date, to_date, log_stat)
+                if archive_content:
+                    # Parse the archive and extract log lines
+                    # For now, use the first log's logType as default for all lines in the archive
+                    log_type = log.get('logType')
+                    log_lines, last_timestamp = parse_log_archive(archive_content, log_type=log_type, last_timestamp=log_stat.get(log_id, {}).get('last_timestamp', 0))
 
-        total_logs_fetched = len(logs)
-        
-        # Check if there are more logs to fetch
-        if total_logs_fetched >= count:
-            print(f"INFO: Fetched {total_logs_fetched} log files, extracted {total_lines_output} log lines from SkySQL", file=sys.stderr)
-            # break
-        
+                    update_log_stat(log_stat, log_id, last_timestamp)
+
+                    print(f"INFO: Extracted {len(log_lines)} log lines from archive {log_id}, file name {log.get('name')}", file=sys.stderr)
+
+                    # Output each log line to stdout in JSON format for Splunk
+                    for log_line in log_lines:
+                        event = {
+                            'time': log_line.get('timestamp', to_date),
+                            'source': 'skysql_logs_archive',
+                            'sourcetype': 'skysql:logs:archive',
+                            'event': {
+                                'message': log_line.get('message'),
+                                'filename': log_line.get('filename'),
+                                'logType': log_type,
+                                'log.level': log_line.get('log.level'),
+                                'server': log.get('server'),
+                                'service': log.get('service'),
+                                'serverDataSourceId': log.get('serverDataSourceId')
+                            }
+                        }
+                        print(json.dumps(event), flush=True)
+                        total_lines_output += 1
+                else:
+                    print(f"WARNING: Failed to fetch archive for log IDs: {log_id}", file=sys.stderr)
+
+            # Save checkpoint
+            save_checkpoint(from_date, to_date, log_stat)
+
+            total_logs_fetched = len(logs)
+
+            # Check if there are more logs to fetch
+            if total_logs_fetched >= count:
+                print(f"INFO: Fetched {total_logs_fetched} log files, extracted {total_lines_output} log lines from SkySQL", file=sys.stderr)
+
         # print(f"INFO: sleeping for {polling_interval} seconds", file=sys.stderr)
         time.sleep(polling_interval)  # Rate limiting based on inputs.conf
 
@@ -446,8 +444,5 @@ def main():
         from_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + 'Z'
         to_date = datetime.utcnow().isoformat() + 'Z'
     
-    
-    print(f"INFO: Fetched {total_logs_fetched} log files, extracted {total_lines_output} log lines from SkySQL", file=sys.stderr)
-
 if __name__ == '__main__':
     main()
