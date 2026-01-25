@@ -1,0 +1,111 @@
+---
+# Namespace for MariaDB monitoring resources
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mariadb-monitoring
+  labels:
+    name: mariadb-monitoring
+
+---
+# Secret containing sensitive credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-metrics-secrets
+  namespace: mariadb-monitoring
+type: Opaque
+stringData:
+  MARIADB_API_KEY: "your-mariadb-api-key"
+  SPLUNK_HEC_TOKEN: "your-splunk-hec-token"
+
+---
+# ConfigMap for non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-metrics-config
+  namespace: mariadb-monitoring
+data:
+  MARIADB_API_URL: "https://api.skysql.com"
+  SPLUNK_HEC_URL: "https://inputs.your-instance.splunkcloud.com:8088"
+  SPLUNK_HEC_VERIFY_SSL: "true"
+  SPLUNK_INDEX: "main"
+  SPLUNK_SOURCE: "mariadbl_metrics_api"
+  SPLUNK_SOURCETYPE: "metrics"
+  METRICS_CHECKPOINT_FILE: "/tmp/metrics_checkpoint.json"
+  METRICS_BATCH_SIZE: "100"
+  METRICS_MAX_RETRIES: "3"
+  METRICS_RETRY_DELAY: "5"
+
+---
+# CronJob to collect metrics every minute
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mariadb-metrics-collector
+  namespace: mariadb-monitoring
+  labels:
+    app: mariadb-metrics
+    component: collector
+spec:
+  # Run every 1 minute
+  schedule: "*/1 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: mariadb-metrics
+            component: collector
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: metrics-collector
+            image: python:3.11-slim
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "Installing dependencies..."
+              pip install --quiet --no-cache-dir requests
+              
+              echo "Running metrics collection..."
+              python3 /scripts/mariadb_metrics_input.py
+              
+              echo "Metrics collection completed successfully"
+            env:
+            - name: MARIADB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-metrics-secrets
+                  key: MARIADB_API_KEY
+            - name: SPLUNK_HEC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mariadb-metrics-secrets
+                  key: SPLUNK_HEC_TOKEN
+            envFrom:
+            - configMapRef:
+                name: mariadb-metrics-config
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "100m"
+              limits:
+                memory: "128Mi"
+                cpu: "200m"
+          volumes:
+          - name: scripts
+            configMap:
+              name: mariadb-metrics-script
+              defaultMode: 0755

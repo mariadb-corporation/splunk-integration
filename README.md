@@ -235,6 +235,7 @@ The metrics integration collects metrics from the MariaDB Cloud Observability AP
 For complete installation, configuration, deployment options, and troubleshooting, see:
 - **[metrics/README.md](metrics/README.md)** - Complete metrics integration documentation
 - **[metrics/metrics-list.md](metrics/metrics-list.md)** - Complete reference of all 89 available metrics
+- **[metrics/examples/](metrics/examples/)** - Ready-to-use deployment examples (cron, systemd, launchd, Kubernetes)
 
 ### Key Features
 

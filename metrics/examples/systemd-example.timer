@@ -1,0 +1,10 @@
+[Unit]
+Description=MariaDB Cloud Metrics Collection Timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

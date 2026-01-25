@@ -1,0 +1,18 @@
+[Unit]
+Description=MariaDB Cloud Metrics Collection Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=splunk
+Environment="MARIADB_API_KEY=your-mariadb-api-key"
+Environment="MARIADB_API_URL=https://api.skysql.com"
+Environment="SPLUNK_HEC_TOKEN=your-splunk-hec-token"
+Environment="SPLUNK_HEC_URL=https://inputs.your-instance.splunkcloud.com:8088"
+Environment="SPLUNK_HEC_VERIFY_SSL=true"
+ExecStart=/opt/splunk-integration/scripts/mariadb_metrics_wrapper.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

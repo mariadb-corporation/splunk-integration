@@ -122,6 +122,8 @@ collection:
 
 ## Deployment Options
 
+**📁 Ready-to-use deployment examples are available in the [`examples/`](examples/) directory** with sanitized configuration files for all deployment methods below.
+
 ### Option 1: Manual Execution
 
 Run the script directly:
