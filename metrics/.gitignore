@@ -1,0 +1,9 @@
+# Ignore actual configuration file (contains secrets)
+config.yaml
+
+# Ignore checkpoint files (runtime state)
+metrics_checkpoint.json
+*.checkpoint.json
+
+# Ignore log files
+*.log

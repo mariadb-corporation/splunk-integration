@@ -1,0 +1,63 @@
+# MariaDB Cloud Metrics Integration Configuration
+# Copy this file to config.yaml and update with your values
+
+# MariaDB Cloud API Configuration
+mariadb:
+  # Base URL for MariaDB Cloud API
+  api_url: https://api.skysql.com
+  
+  # MariaDB Cloud API Key (can also be set via MARIADB_API_KEY environment variable)
+  api_key: ${MARIADB_API_KEY}
+  
+  # Metrics endpoint path
+  metrics_endpoint: /observability/v2/metrics
+
+# Splunk Cloud Platform Configuration
+splunk_cloud:
+  # HEC endpoint URL (without /services/collector path)
+  hec_url: https://inputs.prd-p-xxxxxx.splunkcloud.com:8088
+  
+  # HEC token (can also be set via SPLUNK_HEC_TOKEN environment variable)
+  hec_token: ${SPLUNK_HEC_TOKEN}
+  
+  # Target index for metrics
+  index: main
+  
+  # Source identifier
+  source: mariadbl_metrics_api
+  
+  # Source type
+  sourcetype: metrics
+  
+  # Verify SSL certificates (set to false for self-signed certs)
+  verify_ssl: true
+
+# Collection Settings
+collection:
+  # Polling interval in seconds
+  poll_interval: 60
+  
+  # Checkpoint file location (tracks last successful poll)
+  checkpoint_file: /var/lib/skysql/metrics_checkpoint.json
+  
+  # Batch size for sending metrics to HEC
+  batch_size: 100
+  
+  # Maximum retries for failed API calls
+  max_retries: 3
+  
+  # Retry delay in seconds
+  retry_delay: 5
+
+# Additional fields to add to all metrics
+additional_fields:
+  environment: production
+  cluster_name: skylocalotelcluster
+
+# Logging Configuration
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
