@@ -364,14 +364,6 @@ index=main sourcetype=metrics source=mariadbl_metrics_api
 | where age > 300
 ```
 
-## Security Best Practices
-
-1. **Never hardcode credentials** - Use environment variables or secrets management
-2. **Restrict file permissions** - Checkpoint file should be 600, owned by service user
-3. **Use HTTPS only** - All API calls use SSL/TLS
-4. **Rotate credentials regularly** - Update API keys and HEC tokens periodically
-5. **Limit API key scope** - Use read-only API keys with minimal permissions
-
 ## Support
 
 For issues or questions:

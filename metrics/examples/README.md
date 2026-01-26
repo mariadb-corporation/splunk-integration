@@ -175,19 +175,6 @@ All example files use placeholder values that **must be replaced** with your act
 | `/path/to/splunk-integration` | Actual installation path | Where you cloned this repository (metrics scripts are in metrics/scripts/) |
 | `60` (interval) | Polling interval in seconds | How often to collect metrics (default: 60 seconds, recommended: 60-300) |
 
-## Security Best Practices
-
-1. **Never commit credentials** to version control
-2. **Use environment variables** or secrets management systems
-3. **Enable SSL verification** (`SPLUNK_HEC_VERIFY_SSL=true`)
-4. **Restrict file permissions** on configuration files:
-   ```bash
-   chmod 600 launchd-example.plist
-   chmod 600 systemd-example.service
-   ```
-5. **Use Kubernetes Secrets** for container deployments
-6. **Rotate credentials** regularly
-
 ## Testing Your Configuration
 
 Before deploying, test your configuration:
