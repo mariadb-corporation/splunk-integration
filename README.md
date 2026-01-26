@@ -15,205 +15,103 @@ Both integrations are completely independent and can be deployed separately or t
 
 ## Logs Integration
 
-### How It Works
+The logs integration fetches logs from the MariaDB Cloud Observability API and sends them to Splunk Universal Forwarder.
 
-The logs integration uses a two-step process to fetch logs from MariaDB Cloud:
+### Package Contents
+
+```
+logs/
+├── ARCHITECTURE.md                      # Architecture documentation
+├── QUICKSTART.md                        # Quick start guide
+├── scripts/
+│   ├── skysql_logs_input.py            # Python script for API polling
+│   └── skysql_logs_wrapper.sh          # Wrapper script with environment variables
+├── default/                             # Default Splunk app configuration
+│   ├── app.conf
+│   ├── inputs.conf
+│   └── props.conf
+└── install.sh                           # Installation script
+```
+
+### How It Works
 
 1. **Query for Log Metadata**: Calls `/observability/v2/logs/query` to get metadata about available log files
 2. **Fetch Log Archives**: Uses the log IDs from step 1 to download actual log archives via `/observability/v2/logs/archive`
 3. **Extract & Parse**: Extracts individual log lines from the tar.gz archives and outputs them to Splunk
 
-This approach ensures you get the complete, raw log content rather than just metadata.
+### Quick Start
 
-### Package Contents
+1. **Prerequisites**:
+   - Splunk Universal Forwarder installed
+   - MariaDB Cloud API key
+   - Python 3.x with `requests` library
 
-```
-splunk-integration/
-├── README.md                            # This file
-├── logs/                                # Logs integration (SkySQL Logs API)
-│   ├── scripts/
-│   │   ├── skysql_logs_input.py        # Python script for API polling
-│   │   └── skysql_logs_wrapper.sh      # Wrapper script with environment variables
-│   ├── default/                         # Default Splunk app configuration
-│   │   ├── app.conf
-│   │   ├── inputs.conf
-│   │   └── props.conf
-│   └── install.sh                       # Installation script
-└── metrics/                             # Metrics integration (MariaDB Cloud Metrics API)
-    ├── README.md
-    ├── scripts/
-    │   ├── mariadb_metrics_input.py    # Python script for metrics collection
-    │   └── mariadb_metrics_wrapper.sh  # Wrapper script with environment variables
-    ├── examples/                        # Deployment examples (daemon, systemd, launchd, Kubernetes)
-    │   ├── README.md
-    │   ├── daemon-example.sh
-    │   ├── systemd-example.service
-    │   ├── launchd-example.plist
-    │   ├── kubernetes-deployment-example.yaml
-    │   ├── kubernetes-cronjob-example.yaml
-    │   └── cron-example.sh
-    ├── config.yaml.example
-    ├── TEST_CHECKLIST.md
-    ├── SPLUNK_DASHBOARDS.md
-    ├── metrics-list.md
-    └── metricsAPI.rest
-```
+2. **Installation**:
+   ```bash
+   ./logs/install.sh
+   ```
 
-At runtime on the Splunk Universal Forwarder host:
+3. **Configuration**:
+   ```bash
+   vi /opt/splunkforwarder/bin/scripts/skysql_logs_wrapper.sh
+   # Set your SKYSQL_API_KEY
+   ```
 
-- The **configuration files** from `default/` and `local/` live under
-  `/opt/splunkforwarder/etc/apps/splunk-skysql-integration/`.
-- The **shell and Python scripts** (`*.sh`, `*.py`) are copied to
-  `/opt/splunkforwarder/bin/scripts/`.
+4. **Verify in Splunk**:
+   ```spl
+   index=skysql sourcetype=skysql:logs earliest=-1h
+   | table _time, event.filename, event.message, event.server
+   ```
 
-## Installation
+### Full Documentation
 
-### 1. Copy Package to Splunk
+For complete installation, configuration, and troubleshooting, see:
+- **[logs/ARCHITECTURE.md](logs/ARCHITECTURE.md)** - Architecture and data flow
+- **[logs/QUICKSTART.md](logs/QUICKSTART.md)** - Detailed setup guide
 
-```bash
-# Create the app configuration directory
-sudo mkdir -p /opt/splunkforwarder/etc/apps/splunk-skysql-integration
+### Key Features
 
-# Copy configuration files (default and optional local) into the app directory
-sudo cp -r splunk-skysql-integration/default \
-  /opt/splunkforwarder/etc/apps/splunk-skysql-integration/
-
-# Optionally copy local/ if you want to start from the example outputs.conf
-sudo cp -r splunk-skysql-integration/local \
-  /opt/splunkforwarder/etc/apps/splunk-skysql-integration/
-
-# Ensure a scripts directory exists under Splunk bin and copy the runtime scripts there
-sudo mkdir -p /opt/splunkforwarder/bin/scripts
-sudo cp logs/scripts/*.sh /opt/splunkforwarder/bin/scripts/
-sudo cp logs/scripts/*.py /opt/splunkforwarder/bin/scripts/
-
-# Set proper ownership
-sudo chown -R splunk:splunk /opt/splunkforwarder/etc/apps/splunk-skysql-integration
-sudo chown -R splunk:splunk /opt/splunkforwarder/bin/scripts
-```
-
-### 2. Configure API Key
-
-Edit the wrapper script with your SkySQL API key:
-
-```bash
-vi /opt/splunkforwarder/bin/scripts/skysql_logs_wrapper.sh
-```
-
-Replace `your-api-key-here` with your actual SkySQL API key.
-
-### 3. Set Script Permissions
-
-```bash
-chmod +x /opt/splunkforwarder/bin/scripts/skysql_logs_wrapper.sh
-chmod +x /opt/splunkforwarder/bin/scripts/skysql_logs_input.py
-```
-
-### 4. Install Python Dependencies
-
-```bash
-/opt/splunkforwarder/bin/splunk cmd python3 -m pip install requests
-```
-
-### 5. Configure Outputs (Optional)
-
-If you need to forward to specific indexers:
-
-```bash
-cp /opt/splunkforwarder/etc/apps/splunk-skysql-integration/local/outputs.conf.example \
-   /opt/splunkforwarder/etc/apps/splunk-skysql-integration/local/outputs.conf
-
-# Edit with your indexer details
-vi /opt/splunkforwarder/etc/apps/splunk-skysql-integration/local/outputs.conf
-```
-
-### 6. Restart Splunk Universal Forwarder
-
-```bash
-/opt/splunkforwarder/bin/splunk restart
-```
-
-## Verification
-
-### Test the Script Manually
-
-```bash
-cd /opt/splunkforwarder/bin/scripts
-./skysql_logs_wrapper.sh
-```
-
-### Check Splunk Logs
-
-```bash
-tail -f /opt/splunkforwarder/var/log/splunk/splunkd.log | grep skysql
-```
-
-### Search in Splunk
-
-```spl
-# Search for archive logs (actual log content)
-index=skysql sourcetype=skysql:logs earliest=-1h
-
-# View log messages
-index=skysql sourcetype=skysql:logs 
-| table _time, event.filename, event.message, event.server
-```
-
-## Configuration Options
-
-### Adjust Polling Interval
-
-Edit `default/inputs.conf` and change the `interval` value (in seconds):
-
-```ini
-interval = 300  # Poll every 5 minutes
-```
-
-### Filter by Log Type
-
-Edit `logs/scripts/skysql_logs_input.py` and modify the payload:
-
-```python
-payload = {
-    'fromDate': from_date,
-    'toDate': to_date,
-    'limit': limit,
-    'offset': offset,
-    'logType': ['error-log', 'maxscale-log', 'audit-log'],  # Add specific log types
-    'orderByField': 'startTime',
-    'orderByDirection': 'asc'
-}
-```
-
-### Filter by Server
-
-```python
-payload = {
-    'fromDate': from_date,
-    'toDate': to_date,
-    'limit': limit,
-    'offset': offset,
-    'serverContext': ['server-id-1', 'server-id-2'],  # Add specific servers
-    'orderByField': 'startTime',
-    'orderByDirection': 'asc'
-}
-```
-
-## Troubleshooting
-
-See the main documentation at `../splunk-universal-forwarder-integration.md` for detailed troubleshooting steps.
-
-## Support
-
-For issues or questions:
-- MariaDB Cloud API: https://apidocs.skysql.com/
-- MariaDB Cloud Documentation: https://docs.skysql.com/Observability/
+- **Complete Log Content**: Fetches full log archives, not just metadata
+- **Multiple Log Types**: Supports error logs, audit logs, MaxScale logs, and more
+- **Server Filtering**: Filter logs by specific servers
+- **Splunk Integration**: Native integration with Splunk Universal Forwarder
+- **Configurable Polling**: Adjustable polling intervals
 
 ---
 
 ## Metrics Integration
 
 The metrics integration collects metrics from the MariaDB Cloud Observability API and sends them to Splunk Cloud Platform via HTTP Event Collector (HEC).
+
+### Package Contents
+
+```
+metrics/
+├── README.md                            # Complete documentation
+├── scripts/
+│   ├── mariadb_metrics_input.py        # Python script for metrics collection
+│   └── mariadb_metrics_wrapper.sh      # Wrapper script with environment variables
+├── examples/                            # Deployment examples
+│   ├── README.md
+│   ├── daemon-example.sh               # Daemon mode example (recommended)
+│   ├── systemd-example.service         # Linux systemd service
+│   ├── launchd-example.plist           # macOS launchd service
+│   ├── kubernetes-deployment-example.yaml  # Kubernetes Deployment
+│   ├── kubernetes-cronjob-example.yaml # Kubernetes CronJob (legacy)
+│   └── cron-example.sh                 # Cron job (legacy)
+├── config.yaml.example                  # Configuration template
+├── TEST_CHECKLIST.md                    # Testing guide
+├── SPLUNK_DASHBOARDS.md                 # Dashboard examples
+├── metrics-list.md                      # Complete metrics reference (89 metrics)
+└── metricsAPI.rest                      # API reference
+```
+
+### How It Works
+
+1. **Poll Metrics API**: Fetches metrics in Prometheus format from `/observability/v2/metrics`
+2. **Parse Prometheus**: Parses Prometheus exposition format
+3. **Transform to HEC**: Converts metrics to Splunk HEC event format
+4. **Send to Splunk**: Sends events in batches to Splunk Cloud Platform
 
 ### Quick Start
 
