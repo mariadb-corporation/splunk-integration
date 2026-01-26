@@ -39,19 +39,24 @@ splunk-integration/
 │   │   ├── inputs.conf
 │   │   └── props.conf
 │   └── install.sh                       # Installation script
-├── metrics/                             # Metrics integration (MariaDB Cloud Metrics API)
-│   ├── README.md
-│   ├── scripts/
-│   │   ├── mariadb_metrics_input.py    # Python script for metrics collection
-│   │   └── mariadb_metrics_wrapper.sh  # Wrapper script with environment variables
-│   ├── examples/                        # Deployment examples
-│   ├── config.yaml.example
-│   ├── TEST_CHECKLIST.md
-│   ├── SPLUNK_DASHBOARDS.md
-│   └── metrics-list.md
-└── kubernetes/                          # Kubernetes deployment for metrics
-    ├── mariadb-metrics-cronjob.yaml
-    └── deploy.sh
+└── metrics/                             # Metrics integration (MariaDB Cloud Metrics API)
+    ├── README.md
+    ├── scripts/
+    │   ├── mariadb_metrics_input.py    # Python script for metrics collection
+    │   └── mariadb_metrics_wrapper.sh  # Wrapper script with environment variables
+    ├── examples/                        # Deployment examples (daemon, systemd, launchd, Kubernetes)
+    │   ├── README.md
+    │   ├── daemon-example.sh
+    │   ├── systemd-example.service
+    │   ├── launchd-example.plist
+    │   ├── kubernetes-deployment-example.yaml
+    │   ├── kubernetes-cronjob-example.yaml
+    │   └── cron-example.sh
+    ├── config.yaml.example
+    ├── TEST_CHECKLIST.md
+    ├── SPLUNK_DASHBOARDS.md
+    ├── metrics-list.md
+    └── metricsAPI.rest
 ```
 
 At runtime on the Splunk Universal Forwarder host:

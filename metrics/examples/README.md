@@ -228,8 +228,7 @@ export SPLUNK_HEC_VERIFY_SSL="true"
 - Main Documentation: `../README.md`
 - Test Checklist: `../TEST_CHECKLIST.md`
 - Splunk Dashboards: `../SPLUNK_DASHBOARDS.md`
-- Kubernetes Guide: `../../kubernetes/README.md`
-- Deployment Test Results: `../../DEPLOYMENT_TEST_RESULTS.md`
+- Metrics List: `../metrics-list.md`
 
 ## Support
 
