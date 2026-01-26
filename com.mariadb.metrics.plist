@@ -7,35 +7,31 @@
     
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>/path/to/splunk-integration/metrics/scripts/mariadb_metrics_input.py</string>
-        <string>--daemon</string>
-        <string>--interval</string>
-        <string>60</string>
+        <string>/Users/nedyalko.petrov/Documents/SkySQL/skyrepos/splunk-integration/scripts/mariadb_metrics_wrapper.sh</string>
     </array>
     
     <key>EnvironmentVariables</key>
     <dict>
         <key>MARIADB_API_KEY</key>
-        <string>your-mariadb-api-key</string>
+        <string>skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed</string>
         <key>MARIADB_API_URL</key>
-        <string>https://api.skysql.com</string>
+        <string>https://api-test.skysql.com</string>
         <key>SPLUNK_HEC_TOKEN</key>
-        <string>your-splunk-hec-token</string>
+        <string>a101e96c-88af-488f-bab6-8a5d154b3471</string>
         <key>SPLUNK_HEC_URL</key>
-        <string>https://inputs.your-instance.splunkcloud.com:8088</string>
+        <string>https://inputs.prd-p-29k1h.splunkcloud.com:8088</string>
         <key>SPLUNK_HEC_VERIFY_SSL</key>
-        <string>true</string>
+        <string>false</string>
     </dict>
     
-    <key>KeepAlive</key>
-    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
     
     <key>StandardOutPath</key>
-    <string>/var/log/mariadb_metrics.log</string>
+    <string>/tmp/mariadb_metrics.log</string>
     
     <key>StandardErrorPath</key>
-    <string>/var/log/mariadb_metrics.error.log</string>
+    <string>/tmp/mariadb_metrics.error.log</string>
     
     <key>RunAtLoad</key>
     <true/>

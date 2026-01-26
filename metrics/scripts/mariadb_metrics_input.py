@@ -10,6 +10,8 @@ import json
 import time
 import logging
 import requests
+import signal
+import argparse
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -32,9 +34,6 @@ class MetricsCollector:
         self.splunk_index = os.environ.get("SPLUNK_INDEX", "main")
         self.splunk_source = os.environ.get("SPLUNK_SOURCE", "mariadbl_metrics_api")
         self.splunk_sourcetype = os.environ.get("SPLUNK_SOURCETYPE", "metrics")
-        self.checkpoint_file = os.environ.get(
-            "METRICS_CHECKPOINT_FILE", "/tmp/metrics_checkpoint.json"
-        )
         self.batch_size = int(os.environ.get("METRICS_BATCH_SIZE", "100"))
         self.max_retries = int(os.environ.get("METRICS_MAX_RETRIES", "3"))
         self.retry_delay = int(os.environ.get("METRICS_RETRY_DELAY", "5"))
@@ -59,47 +58,6 @@ class MetricsCollector:
         logger.info(f"MariaDB Cloud API URL: {self.mariadb_api_url}")
         logger.info(f"Splunk HEC URL: {self.splunk_hec_url}")
         logger.info(f"Splunk Index: {self.splunk_index}")
-        logger.info(f"Checkpoint file: {self.checkpoint_file}")
-
-    def load_checkpoint(self) -> Optional[float]:
-        """Load the last successful poll timestamp from checkpoint file"""
-        try:
-            if os.path.exists(self.checkpoint_file):
-                with open(self.checkpoint_file, "r") as f:
-                    data = json.load(f)
-                    timestamp = data.get("last_poll_time")
-                    if timestamp:
-                        logger.info(
-                            f"Loaded checkpoint: {datetime.fromtimestamp(timestamp)}"
-                        )
-                        return timestamp
-        except Exception as e:
-            logger.warning(f"Failed to load checkpoint: {e}")
-
-        return None
-
-    def save_checkpoint(self, timestamp: float):
-        """Save the successful poll timestamp to checkpoint file"""
-        try:
-            checkpoint_dir = os.path.dirname(self.checkpoint_file)
-            if checkpoint_dir and not os.path.exists(checkpoint_dir):
-                os.makedirs(checkpoint_dir, mode=0o755)
-
-            with open(self.checkpoint_file, "w") as f:
-                json.dump(
-                    {
-                        "last_poll_time": timestamp,
-                        "last_poll_datetime": datetime.fromtimestamp(
-                            timestamp
-                        ).isoformat(),
-                    },
-                    f,
-                    indent=2,
-                )
-
-            logger.info(f"Saved checkpoint: {datetime.fromtimestamp(timestamp)}")
-        except Exception as e:
-            logger.error(f"Failed to save checkpoint: {e}")
 
     def fetch_mariadb_metrics(self) -> Optional[str]:
         """Fetch metrics from MariaDB Cloud API in Prometheus format"""
@@ -320,9 +278,6 @@ class MetricsCollector:
         try:
             logger.info("Starting MariaDB Cloud metrics collection")
 
-            last_poll_time = self.load_checkpoint()
-            current_time = time.time()
-
             prometheus_text = self.fetch_mariadb_metrics()
             if not prometheus_text:
                 logger.error("Failed to fetch metrics from MariaDB Cloud API")
@@ -340,8 +295,6 @@ class MetricsCollector:
                 logger.error("Failed to send metrics to Splunk HEC")
                 return 1
 
-            self.save_checkpoint(current_time)
-
             logger.info("Metrics collection completed successfully")
             return 0
 
@@ -350,12 +303,98 @@ class MetricsCollector:
             return 1
 
 
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    global shutdown_requested
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    shutdown_requested = True
+
+
+def run_daemon(interval=60):
+    """Run metrics collection in daemon mode with continuous polling"""
+    global shutdown_requested
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    logger.info(f"Starting daemon mode with {interval} second interval")
+    logger.info("Press Ctrl+C to stop gracefully")
+
+    collector = MetricsCollector()
+
+    while not shutdown_requested:
+        try:
+            logger.info("Starting metrics collection cycle")
+            exit_code = collector.run()
+
+            if exit_code != 0:
+                logger.warning(f"Collection cycle completed with exit code {exit_code}")
+
+            if not shutdown_requested:
+                logger.info(f"Sleeping for {interval} seconds until next collection")
+                # Sleep in small increments to allow quick shutdown
+                for _ in range(interval):
+                    if shutdown_requested:
+                        break
+                    time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Error in daemon loop: {e}", exc_info=True)
+            if not shutdown_requested:
+                logger.info(f"Waiting {interval} seconds before retry")
+                time.sleep(interval)
+
+    logger.info("Daemon shutdown complete")
+    return 0
+
+
 def main():
-    """Entry point"""
+    """Entry point with CLI argument parsing"""
+    parser = argparse.ArgumentParser(
+        description="MariaDB Cloud Metrics Collector for Splunk",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run once (default)
+  %(prog)s
+  
+  # Run as daemon with 60 second interval
+  %(prog)s --daemon --interval 60
+  
+  # Run as daemon with 5 minute interval
+  %(prog)s --daemon --interval 300
+""",
+    )
+
+    parser.add_argument(
+        "--daemon", action="store_true", help="Run in daemon mode (continuous polling)"
+    )
+
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=60,
+        help="Polling interval in seconds for daemon mode (default: 60)",
+    )
+
+    args = parser.parse_args()
+
     try:
-        collector = MetricsCollector()
-        exit_code = collector.run()
+        if args.daemon:
+            # Run in daemon mode
+            exit_code = run_daemon(interval=args.interval)
+        else:
+            # Run once
+            collector = MetricsCollector()
+            exit_code = collector.run()
+
         sys.exit(exit_code)
+
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)

@@ -30,22 +30,28 @@ This approach ensures you get the complete, raw log content rather than just met
 ```
 splunk-integration/
 ├── README.md                            # This file
-├── scripts/
-│   ├── skysql_logs_input.py            # Logs: Python script for API polling
-│   ├── skysql_logs_wrapper.sh          # Logs: Wrapper script with environment variables
-│   ├── mariadb_metrics_input.py        # Metrics: Python script for metrics collection
-│   └── mariadb_metrics_wrapper.sh      # Metrics: Wrapper script for metrics
-├── default/
-│   ├── inputs.conf                      # Logs: Splunk inputs configuration
-│   ├── props.conf                       # Logs: Field extraction and parsing rules
-│   └── app.conf                         # App metadata
-├── local/
-│   └── outputs.conf.example             # Example outputs configuration
-└── metrics/
-    ├── README.md                        # Metrics integration documentation
-    ├── config.yaml.example              # Metrics configuration template
-    └── .gitignore                       # Metrics-specific gitignore
-
+├── logs/                                # Logs integration (SkySQL Logs API)
+│   ├── scripts/
+│   │   ├── skysql_logs_input.py        # Python script for API polling
+│   │   └── skysql_logs_wrapper.sh      # Wrapper script with environment variables
+│   ├── default/                         # Default Splunk app configuration
+│   │   ├── app.conf
+│   │   ├── inputs.conf
+│   │   └── props.conf
+│   └── install.sh                       # Installation script
+├── metrics/                             # Metrics integration (MariaDB Cloud Metrics API)
+│   ├── README.md
+│   ├── scripts/
+│   │   ├── mariadb_metrics_input.py    # Python script for metrics collection
+│   │   └── mariadb_metrics_wrapper.sh  # Wrapper script with environment variables
+│   ├── examples/                        # Deployment examples
+│   ├── config.yaml.example
+│   ├── TEST_CHECKLIST.md
+│   ├── SPLUNK_DASHBOARDS.md
+│   └── metrics-list.md
+└── kubernetes/                          # Kubernetes deployment for metrics
+    ├── mariadb-metrics-cronjob.yaml
+    └── deploy.sh
 ```
 
 At runtime on the Splunk Universal Forwarder host:
@@ -73,8 +79,8 @@ sudo cp -r splunk-skysql-integration/local \
 
 # Ensure a scripts directory exists under Splunk bin and copy the runtime scripts there
 sudo mkdir -p /opt/splunkforwarder/bin/scripts
-sudo cp splunk-skysql-integration/scripts/*.sh /opt/splunkforwarder/bin/scripts/
-sudo cp splunk-skysql-integration/scripts/*.py /opt/splunkforwarder/bin/scripts/
+sudo cp logs/scripts/*.sh /opt/splunkforwarder/bin/scripts/
+sudo cp logs/scripts/*.py /opt/splunkforwarder/bin/scripts/
 
 # Set proper ownership
 sudo chown -R splunk:splunk /opt/splunkforwarder/etc/apps/splunk-skysql-integration
@@ -160,7 +166,7 @@ interval = 300  # Poll every 5 minutes
 
 ### Filter by Log Type
 
-Edit `scripts/skysql_logs_input.py` and modify the payload:
+Edit `logs/scripts/skysql_logs_input.py` and modify the payload:
 
 ```python
 payload = {
@@ -219,9 +225,14 @@ The metrics integration collects metrics from the MariaDB Cloud Observability AP
    export SPLUNK_HEC_URL="https://inputs.prd-p-29k1h.splunkcloud.com:8088"
    ```
 
-3. **Run**:
+3. **Run in daemon mode** (recommended):
    ```bash
-   ./scripts/mariadb_metrics_wrapper.sh
+   python3 metrics/scripts/mariadb_metrics_input.py --daemon --interval 60
+   ```
+   
+   Or run once for testing:
+   ```bash
+   python3 metrics/scripts/mariadb_metrics_input.py
    ```
 
 4. **Verify in Splunk**:
@@ -239,11 +250,12 @@ For complete installation, configuration, deployment options, and troubleshootin
 
 ### Key Features
 
+- **Daemon Mode**: Runs as a persistent process with continuous polling (recommended)
 - **89 Metrics**: Collects 76 MariaDB + 13 MaxScale metrics covering connection, performance, resource utilization, InnoDB operations, and replication
 - **Prometheus Format**: Parses metrics in Prometheus exposition format
-- **Checkpoint Mechanism**: Prevents duplicate data with state tracking
 - **Batch Processing**: Configurable batch size for HEC ingestion
-- **Flexible Deployment**: Supports cron, systemd, and Kubernetes CronJob
+- **Graceful Shutdown**: Handles SIGTERM/SIGINT for clean shutdowns
+- **Flexible Deployment**: Supports daemon mode with systemd/launchd, Kubernetes Deployments, and standalone execution
 
 ### Architecture
 

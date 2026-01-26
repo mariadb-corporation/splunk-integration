@@ -49,3 +49,6 @@ opt/
 *.pem
 *.key
 *.crt
+
+# External repositories
+splunk-otel-collector-chart/
