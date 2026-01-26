@@ -107,7 +107,7 @@ mariadb:
   metrics_endpoint: /observability/v2/metrics
 
 splunk_cloud:
-  hec_url: https://inputs.prd-p-29k1h.splunkcloud.com:8088
+  hec_url: https://inputs.your-instance.splunkcloud.com:8088
   hec_token: ${SPLUNK_HEC_TOKEN}
   index: main
   source: mariadbl_metrics_api
@@ -125,7 +125,7 @@ collection:
 
 ### 🚀 Recommended: Daemon Mode
 
-**Daemon mode is the recommended approach** for production deployments. The collector runs as a persistent process and polls metrics at regular intervals.
+**Daemon mode is the recommended approach** for deployments. The collector runs as a persistent process and polls metrics at regular intervals.
 
 **Benefits:**
 - ✅ Single persistent process (no repeated startup overhead)
@@ -198,7 +198,7 @@ python3 metrics/scripts/mariadb_metrics_input.py
 
 ### Option 5: Cron Job (Legacy)
 
-**Note:** Daemon mode is recommended over cron for production use.
+**Note:** Daemon mode is recommended over cron.
 
 ```bash
 # See examples/cron-example.sh for full configuration
@@ -218,7 +218,7 @@ curl -H "X-Api-Key: your-api-key" \
 ### Test Connection to Splunk HEC
 
 ```bash
-curl -k https://inputs.prd-p-29k1h.splunkcloud.com:8088/services/collector \
+curl -k https://inputs.your-instance.splunkcloud.com:8088/services/collector \
      -H "Authorization: Splunk your-hec-token" \
      -d '{"event":"test","sourcetype":"manual"}'
 ```
@@ -228,7 +228,7 @@ curl -k https://inputs.prd-p-29k1h.splunkcloud.com:8088/services/collector \
 ```bash
 export MARIADB_API_KEY="your-api-key"
 export SPLUNK_HEC_TOKEN="your-hec-token"
-export SPLUNK_HEC_URL="https://inputs.prd-p-29k1h.splunkcloud.com:8088"
+export SPLUNK_HEC_URL="https://inputs.your-instance.splunkcloud.com:8088"
 
 ./scripts/mariadb_metrics_wrapper.sh
 ```

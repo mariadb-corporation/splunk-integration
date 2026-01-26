@@ -35,7 +35,7 @@ vi daemon-example.sh
 python3 ../scripts/mariadb_metrics_input.py --daemon --interval 60
 ```
 
-**Best for:** Production deployments, continuous monitoring, all environments
+**Best for:** Continuous monitoring, all environments
 
 **CLI Options:**
 - `--daemon`: Enable daemon mode (continuous polling)
@@ -105,7 +105,7 @@ sudo systemctl stop mariadb-metrics.service
 
 **Configuration:** Uses daemon mode with 60 second interval, automatic restart on failure
 
-**Best for:** Linux servers, production environments, enterprise environments
+**Best for:** Linux servers, enterprise environments
 
 ---
 
@@ -142,7 +142,7 @@ kubectl logs -f deployment/mariadb-metrics-collector -n mariadb-monitoring
 
 Traditional cron-based scheduling (kept for backward compatibility).
 
-**Note:** Daemon mode is recommended over cron for production use.
+**Note:** Daemon mode is recommended over cron.
 
 **Usage:**
 ```bash
@@ -179,7 +179,7 @@ All example files use placeholder values that **must be replaced** with your act
 
 1. **Never commit credentials** to version control
 2. **Use environment variables** or secrets management systems
-3. **Enable SSL verification** (`SPLUNK_HEC_VERIFY_SSL=true`) in production
+3. **Enable SSL verification** (`SPLUNK_HEC_VERIFY_SSL=true`)
 4. **Restrict file permissions** on configuration files:
    ```bash
    chmod 600 launchd-example.plist
