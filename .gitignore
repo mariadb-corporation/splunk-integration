@@ -33,7 +33,6 @@ pip-wheel-metadata/
 
 # Splunk runtime/state (do not commit)
 skysql_checkpoint.json
-*checkpoint*.json
 
 # Common Splunk generated dirs (if you ever copy UF app layout into the repo)
 local/

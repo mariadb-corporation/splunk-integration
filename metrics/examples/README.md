@@ -208,7 +208,6 @@ export SPLUNK_HEC_VERIFY_SSL="true"
 3. **Permission Denied**
    - Check file permissions
    - Ensure user has execute permissions
-   - Verify checkpoint directory is writable
 
 ## Additional Resources
 

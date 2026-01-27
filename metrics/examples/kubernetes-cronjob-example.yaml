@@ -33,7 +33,6 @@ data:
   SPLUNK_INDEX: "main"
   SPLUNK_SOURCE: "mariadbl_metrics_api"
   SPLUNK_SOURCETYPE: "metrics"
-  METRICS_CHECKPOINT_FILE: "/tmp/metrics_checkpoint.json"
   METRICS_BATCH_SIZE: "100"
   METRICS_MAX_RETRIES: "3"
   METRICS_RETRY_DELAY: "5"

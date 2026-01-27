@@ -54,7 +54,6 @@ export SPLUNK_HEC_TOKEN="your-actual-hec-token"
 export SPLUNK_INDEX="main"
 export SPLUNK_SOURCE="mariadbl_metrics_api"
 export SPLUNK_SOURCETYPE="metrics"
-export METRICS_CHECKPOINT_FILE="/tmp/metrics_checkpoint.json"
 ```
 
 **Verify:**
@@ -83,7 +82,6 @@ INFO: Transformed XX metrics to HEC event format
 INFO: Sending batch 1/X (XX events)
 INFO: Batch 1 sent successfully
 INFO: Successfully sent XX/XX events to Splunk HEC
-INFO: Saved checkpoint: YYYY-MM-DD HH:MM:SS
 INFO: Metrics collection completed successfully
 ```
 
@@ -101,10 +99,11 @@ cd /Users/nedyalko.petrov/Documents/SkySQL/skyrepos/splunk-integration
 
 **Expected:** Same output as Test 5, plus wrapper script logging
 
-## Test 7: Verify Checkpoint File
+## Test 7: Verify Splunk Data
 
 ```bash
-cat /tmp/metrics_checkpoint.json
+# Search in Splunk for recent metrics
+index=main sourcetype=metrics source=mariadbl_metrics_api earliest=-5m
 ```
 
 **Expected:**
@@ -172,19 +171,16 @@ python3 scripts/mariadb_metrics_input.py
 
 **Expected:** Error message about HEC authentication failure
 
-## Test 10: Test Checkpoint Mechanism
+## Test 10: Test Multiple Runs
 
 ```bash
-# Run script twice
+# Run script twice to verify consistency
 ./scripts/mariadb_metrics_wrapper.sh
 sleep 5
 ./scripts/mariadb_metrics_wrapper.sh
-
-# Check checkpoint was updated
-cat /tmp/metrics_checkpoint.json
 ```
 
-**Expected:** Checkpoint timestamp updated after second run
+**Expected:** Both runs complete successfully with metrics sent to Splunk
 
 ## Common Issues and Solutions
 
@@ -217,13 +213,12 @@ index=_internal sourcetype=splunkd component=HttpEventCollector
 index=* source=mariadbl_metrics_api
 ```
 
-### Issue: Permission denied on checkpoint file
+### Issue: Permission denied on log files
 **Solution:**
 ```bash
-mkdir -p /var/lib/mariadb
-chmod 755 /var/lib/mariadb
-# Or use /tmp for testing
-export METRICS_CHECKPOINT_FILE="/tmp/metrics_checkpoint.json"
+# Ensure log directory is writable
+mkdir -p /var/log
+chmod 755 /var/log
 ```
 
 ## Success Criteria
@@ -233,7 +228,6 @@ export METRICS_CHECKPOINT_FILE="/tmp/metrics_checkpoint.json"
 - [x] Metrics parsed from Prometheus format
 - [x] Metrics transformed to HEC format
 - [x] Metrics sent to Splunk HEC successfully
-- [x] Checkpoint file created and updated
 - [x] Metrics visible in Splunk Cloud Platform
 - [x] All expected fields present (metric_name, _value, dimensions)
 - [x] Time series data displays correctly in Splunk

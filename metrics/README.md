@@ -285,18 +285,6 @@ index=* source=mariadbl_metrics_api
 index=_internal sourcetype=splunkd component=HttpEventCollector
 ```
 
-### Issue: Checkpoint File Permission Denied
-
-**Error**: `Failed to save checkpoint: Permission denied`
-
-**Solution**:
-```bash
-# Create checkpoint directory with proper permissions
-sudo mkdir -p /var/lib/mariadb
-sudo chown splunk:splunk /var/lib/mariadb
-sudo chmod 755 /var/lib/mariadb
-```
-
 ### Issue: Python Module Not Found
 
 **Error**: `ModuleNotFoundError: No module named 'requests'`
@@ -345,13 +333,6 @@ sudo systemctl status mariadb-metrics.service
 
 # View systemd logs
 sudo journalctl -u mariadb-metrics.service -f
-```
-
-### Monitor Checkpoint
-
-```bash
-# View last successful poll
-cat /var/lib/mariadb/metrics_checkpoint.json
 ```
 
 ### Create Splunk Alerts

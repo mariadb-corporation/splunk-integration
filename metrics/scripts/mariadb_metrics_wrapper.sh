@@ -19,7 +19,6 @@ export SPLUNK_SOURCE="${SPLUNK_SOURCE:-mariadbl_metrics_api}"
 export SPLUNK_SOURCETYPE="${SPLUNK_SOURCETYPE:-metrics}"
 
 # Metrics Collection Configuration
-export METRICS_CHECKPOINT_FILE="${METRICS_CHECKPOINT_FILE:-/var/lib/mariadb/metrics_checkpoint.json}"
 export METRICS_POLL_INTERVAL="${METRICS_POLL_INTERVAL:-60}"
 export METRICS_BATCH_SIZE="${METRICS_BATCH_SIZE:-100}"
 export METRICS_MAX_RETRIES="${METRICS_MAX_RETRIES:-3}"
@@ -55,22 +54,11 @@ if [ "${SPLUNK_HEC_TOKEN}" = "your-hec-token-here" ]; then
     exit 1
 fi
 
-# Create checkpoint directory if it doesn't exist
-CHECKPOINT_DIR="$(dirname "${METRICS_CHECKPOINT_FILE}")"
-if [ ! -d "${CHECKPOINT_DIR}" ]; then
-    echo "INFO: Creating checkpoint directory: ${CHECKPOINT_DIR}"
-    mkdir -p "${CHECKPOINT_DIR}" || {
-        echo "WARNING: Failed to create checkpoint directory, using /tmp"
-        export METRICS_CHECKPOINT_FILE="/tmp/metrics_checkpoint.json"
-    }
-fi
-
-# Log execution start
+# Print configuration start
 echo "INFO: Starting MariaDB Cloud metrics collection at $(date)"
 echo "INFO: MariaDB API URL: ${MARIADB_API_URL}"
 echo "INFO: Splunk HEC URL: ${SPLUNK_HEC_URL}"
 echo "INFO: Splunk Index: ${SPLUNK_INDEX}"
-echo "INFO: Checkpoint file: ${METRICS_CHECKPOINT_FILE}"
 
 # Execute the Python script
 ${PYTHON_CMD} "${SCRIPT_DIR}/mariadb_metrics_input.py"

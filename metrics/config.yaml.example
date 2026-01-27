@@ -37,9 +37,6 @@ collection:
   # Polling interval in seconds
   poll_interval: 60
   
-  # Checkpoint file location (tracks last successful poll)
-  checkpoint_file: /var/lib/skysql/metrics_checkpoint.json
-  
   # Batch size for sending metrics to HEC
   batch_size: 100
   
