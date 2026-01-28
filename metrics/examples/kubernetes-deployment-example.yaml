@@ -1,0 +1,133 @@
+---
+# Namespace for MariaDB metrics collection
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mariadb-monitoring
+
+---
+# Secret containing sensitive credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-metrics-secrets
+  namespace: mariadb-monitoring
+type: Opaque
+stringData:
+  MARIADB_API_KEY: "your-mariadb-api-key"
+  SPLUNK_HEC_TOKEN: "your-splunk-hec-token"
+
+---
+# ConfigMap for non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mariadb-metrics-config
+  namespace: mariadb-monitoring
+data:
+  MARIADB_API_URL: "https://api.skysql.com"
+  SPLUNK_HEC_URL: "https://inputs.your-instance.splunkcloud.com:8088"
+  SPLUNK_HEC_VERIFY_SSL: "true"
+  SPLUNK_INDEX: "main"
+  SPLUNK_SOURCE: "mariadb_metrics_api"
+  SPLUNK_SOURCETYPE: "metrics"
+  METRICS_BATCH_SIZE: "100"
+  COLLECTION_INTERVAL: "60"
+
+---
+# Deployment for continuous metrics collection
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb-metrics-collector
+  namespace: mariadb-monitoring
+  labels:
+    app: mariadb-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb-metrics
+  template:
+    metadata:
+      labels:
+        app: mariadb-metrics
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: metrics-collector
+        image: python:3.11-slim
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install --no-cache-dir requests && \
+            python3 /app/mariadb_metrics_input.py --daemon --interval ${COLLECTION_INTERVAL}
+        env:
+        - name: MARIADB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mariadb-metrics-secrets
+              key: MARIADB_API_KEY
+        - name: SPLUNK_HEC_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mariadb-metrics-secrets
+              key: SPLUNK_HEC_TOKEN
+        - name: MARIADB_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: MARIADB_API_URL
+        - name: SPLUNK_HEC_URL
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: SPLUNK_HEC_URL
+        - name: SPLUNK_HEC_VERIFY_SSL
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: SPLUNK_HEC_VERIFY_SSL
+        - name: SPLUNK_INDEX
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: SPLUNK_INDEX
+        - name: SPLUNK_SOURCE
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: SPLUNK_SOURCE
+        - name: SPLUNK_SOURCETYPE
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: SPLUNK_SOURCETYPE
+        - name: METRICS_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: METRICS_BATCH_SIZE
+        - name: COLLECTION_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-metrics-config
+              key: COLLECTION_INTERVAL
+        volumeMounts:
+        - name: script
+          mountPath: /app
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: script
+        configMap:
+          name: mariadb-metrics-script
+          items:
+          - key: mariadb_metrics_input.py
+            path: mariadb_metrics_input.py
+            mode: 0755

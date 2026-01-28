@@ -1,0 +1,5 @@
+# Ignore actual configuration file (contains secrets)
+config.yaml
+
+# Ignore log files
+*.log

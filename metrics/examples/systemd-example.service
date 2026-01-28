@@ -1,0 +1,20 @@
+[Unit]
+Description=MariaDB Cloud Metrics Collector for Splunk (Daemon Mode)
+After=network.target
+
+[Service]
+Type=simple
+User=splunk
+Restart=always
+RestartSec=10
+Environment="MARIADB_API_KEY=your-mariadb-api-key"
+Environment="MARIADB_API_URL=https://api.skysql.com"
+Environment="SPLUNK_HEC_TOKEN=your-splunk-hec-token"
+Environment="SPLUNK_HEC_URL=https://inputs.your-instance.splunkcloud.com:8088"
+Environment="SPLUNK_HEC_VERIFY_SSL=true"
+ExecStart=/usr/bin/python3 /opt/splunk-integration/metrics/scripts/mariadb_metrics_input.py --daemon --interval 60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

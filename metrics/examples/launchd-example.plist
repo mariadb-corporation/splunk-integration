@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mariadb.metrics</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/path/to/splunk-integration/metrics/scripts/mariadb_metrics_input.py</string>
+        <string>--daemon</string>
+        <string>--interval</string>
+        <string>60</string>
+    </array>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MARIADB_API_KEY</key>
+        <string>your-mariadb-api-key</string>
+        <key>MARIADB_API_URL</key>
+        <string>https://api.skysql.com</string>
+        <key>SPLUNK_HEC_TOKEN</key>
+        <string>your-splunk-hec-token</string>
+        <key>SPLUNK_HEC_URL</key>
+        <string>https://inputs.your-instance.splunkcloud.com:8088</string>
+        <key>SPLUNK_HEC_VERIFY_SSL</key>
+        <string>true</string>
+    </dict>
+    
+    <key>KeepAlive</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>/var/log/mariadb_metrics.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/var/log/mariadb_metrics.error.log</string>
+    
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

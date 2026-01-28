@@ -1,0 +1,43 @@
+GET https://api-test.skysql.com/observability/v2/metrics
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+
+GET https://api-test.skysql.com/observability/v2/events/server_sets
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+### Alerting Service - Get all alert rules
+GET https://api-test.skysql.com/als/v1/rules
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+###
+
+### Alerting Service - Get specific alert rule by ID
+GET https://api-test.skysql.com/als/v1/rules/970cd9534f1c9a6bc62b37d914a35f52c94cf5baf5217b85bfe69d45e83ca10a
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+###
+
+### Alerting Service - Get alerts (active/firing alerts)
+GET https://api-test.skysql.com/als/v1/alerts
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+###
+
+### Alerting Service - Get alert history
+GET https://api-test.skysql.com/als/v1/alerts/history
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+###
+
+### Alerting Service - Get alert rules filtered by metric
+GET https://api-test.skysql.com/als/v1/rules?metricId=diskData
+Accept: application/json
+X-Api-Key: skysql.1zzz.5yw3vcv6.AyTAlj9iYSsRKqW4iJgw2bCwsOZ0TADfbtza.ed3b35ed
+
+###
