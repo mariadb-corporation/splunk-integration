@@ -43,6 +43,7 @@ logs/
 
 1. **Prerequisites**:
    - Splunk Universal Forwarder installed
+   - Splunk Cloud account with index `skysql` created
    - MariaDB Cloud API key
    - Python 3.x with `requests` library
 

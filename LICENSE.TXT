@@ -1,0 +1,81 @@
+MariaDB Software License Terms
+
+These MariaDB Software License Terms (“Terms”) govern the Customer’s use of MariaDB proprietary software
+made  available  by  MariaDB  USA,  Inc.  or  its  affiliate  (“MariaDB”)  to  Customer,  including  its  Documentation,
+updates, and, if applicable, new versions (“Software”). “Documentation” means written technical information for
+the  Software.  By  using  Software,  Customer  agrees  to  these  Terms.  These  Terms  are  in  addition  to,  and
+supplement, the terms of a written agreement or MariaDB order form (the “Agreement”) between MariaDB and
+Customer, each as identified in the Agreement. Except as set forth herein, capitalized terms have the meanings
+set forth in the Agreement.
+
+1. License Grant. Subject to Customer’s payment of the applicable fees as set forth in the Agreement, MariaDB
+grants  to  Customer  a  personal,  limited,  non-exclusive,  non-transferable,  worldwide,  and  revocable  license,
+without  the  right  to  sublicense,  to  use  Software  for  Customer’s  internal  business  purposes  and  to  use  the
+Software’s documentation in support of Customer’s use of Software.
+
+2.  License  Restrictions.  Customer’s  may  only  use  Software  during  the  applicable  subscription  term
+(“Subscription  Term”)  and  only  in  combination  with  MariaDB  products  or  services  for  which  it  has  purchased
+subscription services from MariaDB or an authorized MariaDB partner. Customer has no right, and agrees not to:
+
+(1)  transfer,  assign,  resell,  distribute,  rent,  lease,  lend,  or  sublicense  its  license  rights. Any  attempt  to  do  so  is
+void.  Customer  shall  not  use  Software  with  any  MariaDB  products  or  services  for  which  it  has  not  purchased
+subscription services,
+
+(2)  use  Software  in  breach  or  excess  of  any  limitations  (e.g.,  quantities,  a  combination  with  other  MariaDB
+products or services) prescribed by or agreed with MariaDB,
+
+(3) use Software to perform services for third parties, whether on a service bureau or time-sharing basis, by way
+of  managed  services,  commercial  hosting  services  or  similar  environment,  or  otherwise,  without  the  express
+written authorization of MariaDB,
+
+(4) use Software to develop products or services competing with MariaDB products or services,
+
+(5) use Software in any hazardous environment requiring fail-safe performance, where the failure of the Software
+could lead directly to death, personal injury, or severe physical or environmental damage,
+
+(6)  remove,  conceal,  or  alter  any  Software  identification,  proprietary,  copyright,  intellectual  property,  or  other
+notices in Software and Documentation,
+
+(7) copy, decrypt, decompile, reverse engineer, disassemble, reduce to human-readable form, derive, or attempt
+to derive the source code  of,  algorithms,  methods  or  techniques embodied  in  Software, or any  updates or any
+part thereof, except to the extent expressly required by applicable law,
+
+(8) modify, adapt, or create a derivative work of Software, or any updates or any part thereof, or
+
+(9) assist or encourage any third party to do any of the foregoing.
+
+3.  Proprietary Rights.  MariaDB  owns  all  worldwide  right,  title  and  interest  in  Software  and  Documentation
+including all related copyright, trademarks, service marks, patents, trade secrets, know-how, moral rights, and all
+other  proprietary  rights,  including  registrations,  applications,  renewals  and  extensions  of  such  rights  existing
+anywhere in the world, whether registered or unregistered. Software is a trade secret of MariaDB and constitutes
+MariaDB  confidential  information.  Except for  the rights expressly granted  in these Terms, MariaDB reserves all
+other rights in the Software and Documentation. Customer acquires no rights in the Software or Documentation
+other than those expressly specified in these Terms.
+
+4.  Proprietary Notices.  Customer  must reproduce all copyright and other  proprietary notices on any copies of
+the Software, exactly as they appear on the original.
+
+5. Audit and Unauthorized Use. Customer’s use of Software is subject to audit rights and obligations set forth
+in the Agreement. Unauthorized use of the Software is a material breach of these Terms. Upon notice, Customer
+must  promptly  pay  any  applicable  additional  fees  for  such  use.  These  fees  will  be  calculated  based  on
+MariaDB's  then-current  list  prices  for  the  unauthorized  use.  A  breach  of  the  license  restrictions  will  cause
+irreparable  harm  to  MariaDB,  entitling  it  to  seek  immediate  injunctive  relief  in  addition  to  any  other  available
+remedies.
+
+6.  Benchmarking.  Customer  must  obtain  MariaDB’s  prior  written  approval  to  disclose  benchmarks  or
+comparative tests or evaluations (each, a “Benchmark”) of Software to any third party. Any approved disclosure
+of the Benchmark must be accompanied by a complete and accurate description of the testing environment and
+methodology, as stipulated by MariaDB.
+
+7. Term and Termination. Upon termination or expiration of the Subscription Term, Customer must immediately
+stop  using  and,  within  ten  (10)  business  days,  destroy  all  copies  of  the  Software  and  Documentation  in  its
+possession  or  under  its  control.  If  requested,  Customer  must  certify  this  destruction  in  writing  to  MariaDB.  All
+limitations of liability, disclaimers of warranty, and restrictions will survive termination of these Terms.
+
+8. FOSS. These Terms do not apply to or change the license terms of any software that is subject to a free and
+open-source software (FOSS) license.
+
+9.  Miscellaneous.  In  case  of  conflict,  the  terms  of  the Agreement  prevail  over  these  Terms.  If  any  portion  of
+these  Terms  is  found  to  be  void  or  unenforceable,  the  remaining  provisions  of  these  Terms  will  remain  in  full
+force and effect. Except as expressly provided herein, these Terms, together with the Agreement, constitute the
+entire agreement between the parties with respect to the license of Software and Documentation.
