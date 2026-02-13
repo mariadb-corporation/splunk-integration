@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+# Copyright (c) 2026 MariaDB plc. All rights reserved.
+#
+# This software is intended for use by MariaDB subscription customers only.
+# Unauthorized modification, copying or distribution is prohibited.
+# MariaDB product terms at https://mariadb.com/terms/ apply.
+
 """
 SkySQL Logs API Input Script for Splunk Universal Forwarder
 Polls the SkySQL Logs API and outputs logs in JSON format for Splunk ingestion

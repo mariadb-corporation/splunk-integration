@@ -2,6 +2,7 @@
 
 ### Prerequisites
 - Splunk Universal Forwarder installed
+- Splunk Cloud account with index `skysql` created
 - SkySQL API Key
 - Python 3.x with `requests` library
 

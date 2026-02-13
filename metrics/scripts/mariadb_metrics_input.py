@@ -1,4 +1,9 @@
-#!/usr/bin/env python3
+# Copyright (c) 2026 MariaDB plc. All rights reserved.
+#
+# This software is intended for use by MariaDB subscription customers only.
+# Unauthorized modification, copying or distribution is prohibited.
+# MariaDB product terms at https://mariadb.com/terms/ apply.
+
 """
 MariaDB Cloud Metrics Input Script for Splunk Cloud Platform
 Polls MariaDB Cloud Metrics API and sends metrics to Splunk HEC endpoint
