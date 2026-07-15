@@ -1,5 +1,5 @@
 ---
-# Namespace for MariaDB metrics collection
+# Namespace for MariaDB Cloud logs collection
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -10,7 +10,7 @@ metadata:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: mariadb-metrics-secrets
+  name: mariadb-logs-secrets
   namespace: mariadb-monitoring
 type: Opaque
 stringData:
@@ -22,100 +22,127 @@ stringData:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: mariadb-metrics-config
+  name: mariadb-logs-config
   namespace: mariadb-monitoring
 data:
   MARIADB_API_URL: "https://api.skysql.com"
   SPLUNK_HEC_URL: "https://inputs.your-instance.splunkcloud.com:8088"
   SPLUNK_HEC_VERIFY_SSL: "true"
-  SPLUNK_INDEX: "mariadb_metrics"
-  SPLUNK_SOURCE: "mariadb_metrics_api"
-  SPLUNK_SOURCETYPE: "metrics"
-  METRICS_BATCH_SIZE: "100"
-  COLLECTION_INTERVAL: "60"
+  SPLUNK_INDEX: "mariadb_logs"
+  SPLUNK_SOURCE: "mariadb_logs_api"
+  SPLUNK_SOURCETYPE: "mariadb:logs"
+  CHECKPOINT_FILE: "/data/mariadb_checkpoint.json"
+  LOGS_BATCH_SIZE: "100"
+  COLLECTION_INTERVAL: "300"
 
 ---
-# Deployment for continuous metrics collection
+# PersistentVolumeClaim for the dedup checkpoint.
+# The checkpoint tracks the last-seen timestamp per log archive; persisting it
+# across pod restarts prevents re-ingesting logs already sent to Splunk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-logs-checkpoint
+  namespace: mariadb-monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 128Mi
+
+---
+# Deployment for continuous logs collection
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mariadb-metrics-collector
+  name: mariadb-logs-collector
   namespace: mariadb-monitoring
   labels:
-    app: mariadb-metrics
+    app: mariadb-logs
 spec:
   replicas: 1
+  # Keep a single collector so the checkpoint is not written concurrently.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
-      app: mariadb-metrics
+      app: mariadb-logs
   template:
     metadata:
       labels:
-        app: mariadb-metrics
+        app: mariadb-logs
     spec:
       restartPolicy: Always
       containers:
-      - name: metrics-collector
+      - name: logs-collector
         image: python:3.11-slim
         command: ["/bin/sh", "-c"]
         args:
           - |
             pip install --no-cache-dir requests && \
-            python3 /app/mariadb_metrics_collector.py --daemon --interval ${COLLECTION_INTERVAL}
+            python3 /app/mariadb_logs_collector.py --daemon --interval ${COLLECTION_INTERVAL}
         env:
         - name: MARIADB_API_KEY
           valueFrom:
             secretKeyRef:
-              name: mariadb-metrics-secrets
+              name: mariadb-logs-secrets
               key: MARIADB_API_KEY
         - name: SPLUNK_HEC_TOKEN
           valueFrom:
             secretKeyRef:
-              name: mariadb-metrics-secrets
+              name: mariadb-logs-secrets
               key: SPLUNK_HEC_TOKEN
         - name: MARIADB_API_URL
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: MARIADB_API_URL
         - name: SPLUNK_HEC_URL
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: SPLUNK_HEC_URL
         - name: SPLUNK_HEC_VERIFY_SSL
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: SPLUNK_HEC_VERIFY_SSL
         - name: SPLUNK_INDEX
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: SPLUNK_INDEX
         - name: SPLUNK_SOURCE
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: SPLUNK_SOURCE
         - name: SPLUNK_SOURCETYPE
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: SPLUNK_SOURCETYPE
-        - name: METRICS_BATCH_SIZE
+        - name: CHECKPOINT_FILE
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
-              key: METRICS_BATCH_SIZE
+              name: mariadb-logs-config
+              key: CHECKPOINT_FILE
+        - name: LOGS_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: mariadb-logs-config
+              key: LOGS_BATCH_SIZE
         - name: COLLECTION_INTERVAL
           valueFrom:
             configMapKeyRef:
-              name: mariadb-metrics-config
+              name: mariadb-logs-config
               key: COLLECTION_INTERVAL
         volumeMounts:
         - name: script
           mountPath: /app
+        - name: checkpoint
+          mountPath: /data
         resources:
           requests:
             memory: "128Mi"
@@ -126,8 +153,11 @@ spec:
       volumes:
       - name: script
         configMap:
-          name: mariadb-metrics-script
+          name: mariadb-logs-script
           items:
-          - key: mariadb_metrics_collector.py
-            path: mariadb_metrics_collector.py
+          - key: mariadb_logs_collector.py
+            path: mariadb_logs_collector.py
             mode: 0755
+      - name: checkpoint
+        persistentVolumeClaim:
+          claimName: mariadb-logs-checkpoint

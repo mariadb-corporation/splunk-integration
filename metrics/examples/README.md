@@ -32,7 +32,7 @@ vi daemon-example.sh
 ./daemon-example.sh
 
 # Or run directly with custom interval
-python3 ../scripts/mariadb_metrics_input.py --daemon --interval 60
+python3 ../scripts/mariadb_metrics_collector.py --daemon --interval 60
 ```
 
 **Best for:** Continuous monitoring, all environments
@@ -40,6 +40,7 @@ python3 ../scripts/mariadb_metrics_input.py --daemon --interval 60
 **CLI Options:**
 - `--daemon`: Enable daemon mode (continuous polling)
 - `--interval N`: Set polling interval in seconds (default: 60)
+- `--verbose`: Enable DEBUG logging
 
 ---
 
@@ -120,7 +121,7 @@ vi kubernetes-deployment-example.yaml
 
 # Create ConfigMap from Python script
 kubectl create configmap mariadb-metrics-script \
-  --from-file=mariadb_metrics_input.py=../scripts/mariadb_metrics_input.py \
+  --from-file=mariadb_metrics_collector.py=../scripts/mariadb_metrics_collector.py \
   -n mariadb-monitoring
 
 # Apply manifest
