@@ -12,7 +12,7 @@ The MariaDB Cloud Metrics integration polls the MariaDB Cloud Observability API 
 
 ```
 MariaDB Cloud API → Python Script → Parse Prometheus → Transform to HEC → Splunk Cloud Platform
-                    (mariadb_metrics_input.py)                              (HEC Endpoint)
+                    (mariadb_metrics_collector.py)                              (HEC Endpoint)
 ```
 
 ### Key Features
@@ -35,17 +35,23 @@ MariaDB Cloud API → Python Script → Parse Prometheus → Transform to HEC �
 
 2. **Splunk Cloud Platform**
    - Active Splunk Cloud instance
+   - A target index created as a **Metrics-type index** (index data type
+     `Metrics`, **not** Events/log type). The collector sends HEC
+     metric-format events (`"event": "metric"` with `metric_name` / `_value`
+     in `fields`), which are only ingested correctly by a metrics index.
    - HTTP Event Collector (HEC) enabled
-   - HEC token created with write access to target index
+   - HEC token created with write access to that metrics index
 
 3. **Python 3.7+**
    - `requests` library (install via `pip install requests`)
 
 ### Optional
 
-- Splunk Universal Forwarder (for integrated deployment)
 - systemd (Linux) or launchd (macOS) for service management
 - Kubernetes cluster (for containerized deployment)
+
+The collector sends metrics **directly to Splunk Cloud via HEC** — a Splunk
+Universal Forwarder is not required.
 
 ## Installation
 
@@ -65,13 +71,7 @@ pip3 install requests
 
 ### Step 3: Configure Environment Variables
 
-Copy the example configuration:
-
-```bash
-cp metrics/config.yaml.example metrics/config.yaml
-```
-
-Edit `metrics/config.yaml` or set environment variables:
+Set the required environment variables:
 
 ```bash
 export MARIADB_API_KEY="your-mariadb-api-key"
@@ -89,35 +89,16 @@ export SPLUNK_HEC_TOKEN="your-splunk-hec-token"
 | `SPLUNK_HEC_URL` | Yes | - | Splunk HEC endpoint URL (without path) |
 | `SPLUNK_HEC_TOKEN` | Yes | - | Splunk HEC authentication token |
 | `SPLUNK_HEC_VERIFY_SSL` | No | `true` | Verify SSL certificates for HEC connection (`true`/`false`) |
-| `SPLUNK_INDEX` | No | `main` | Target Splunk index |
+| `SPLUNK_INDEX` | No | `mariadb_metrics` | Target Splunk index (must be a **Metrics-type** index) |
 | `SPLUNK_SOURCE` | No | `mariadbl_metrics_api` | Source identifier |
 | `SPLUNK_SOURCETYPE` | No | `metrics` | Source type |
 | `METRICS_BATCH_SIZE` | No | `100` | Number of events per HEC batch |
 | `METRICS_MAX_RETRIES` | No | `3` | Maximum retry attempts |
 | `METRICS_RETRY_DELAY` | No | `5` | Retry delay in seconds |
 
-### Configuration File
-
-Alternatively, use `metrics/config.yaml`:
-
-```yaml
-mariadb:
-  api_url: https://api.skysql.com
-  api_key: ${MARIADB_API_KEY}
-  metrics_endpoint: /observability/v2/metrics
-
-splunk_cloud:
-  hec_url: https://inputs.your-instance.splunkcloud.com:8088
-  hec_token: ${SPLUNK_HEC_TOKEN}
-  index: main
-  source: mariadbl_metrics_api
-  sourcetype: metrics
-  verify_ssl: true
-
-collection:
-  poll_interval: 60
-  batch_size: 100
-```
+> **Note:** The collector reads configuration **only** from the environment
+> variables above. There is no config file — the Python script does not read
+> YAML or any other config file.
 
 ## Deployment Options
 
@@ -135,8 +116,15 @@ collection:
 - ✅ Better resource utilization
 
 **CLI Options:**
+- `--daemon`: Run continuously (polling loop)
+- `--interval N`: Polling interval in seconds (default: 60)
+- `--verbose`: Enable DEBUG logging (e.g. Prometheus line-parse failures)
+
 ```bash
-python3 metrics/scripts/mariadb_metrics_input.py --daemon --interval 60
+python3 metrics/scripts/mariadb_metrics_collector.py --daemon --interval 60
+```
+
+### Option 1: Daemon Mode with systemd (Linux) ⭐
 
 Run as a persistent systemd service:
 
@@ -171,7 +159,7 @@ Deploy as a Kubernetes Deployment for containerized environments:
 
 # Create ConfigMap from Python script
 kubectl create configmap mariadb-metrics-script \
-  --from-file=mariadb_metrics_input.py=metrics/scripts/mariadb_metrics_input.py \
+  --from-file=mariadb_metrics_collector.py=metrics/scripts/mariadb_metrics_collector.py \
   -n mariadb-monitoring
 
 # Apply deployment
@@ -190,7 +178,7 @@ Run manually for testing:
 
 ```bash
 # Run once
-python3 metrics/scripts/mariadb_metrics_input.py
+python3 metrics/scripts/mariadb_metrics_collector.py
 
 # Or via wrapper (sets environment variables)
 ./metrics/scripts/mariadb_metrics_wrapper.sh
@@ -230,22 +218,21 @@ export MARIADB_API_KEY="your-api-key"
 export SPLUNK_HEC_TOKEN="your-hec-token"
 export SPLUNK_HEC_URL="https://inputs.your-instance.splunkcloud.com:8088"
 
-./scripts/mariadb_metrics_wrapper.sh
+./metrics/scripts/mariadb_metrics_wrapper.sh
 ```
 
 ### Verify Metrics in Splunk
 
-Search for metrics in Splunk Cloud Platform:
+Search for metrics in Splunk Cloud Platform. Because the target is a
+**Metrics-type index**, use the metrics search commands (`mstats` / `mpreview`),
+not the event-style `index=… | stats/timechart` pipeline:
 
 ```spl
-index=main sourcetype=metrics source=mariadbl_metrics_api
-| stats count by metric_name
+| mstats count WHERE index=mariadb_metrics AND source=mariadbl_metrics_api AND metric_name="mariadb.*" BY metric_name
 
-index=main sourcetype=metrics metric_name="mariadb.mariadb_server_cpu"
-| timechart avg(_value) by server_name
+| mstats avg(_value) WHERE index=mariadb_metrics AND metric_name="mariadb.mariadb_server_cpu" span=1m BY server_name
 
-index=main sourcetype=metrics metric_name="mariadb.mariadb_global_status_threads_connected"
-| timechart avg(_value) by service_name
+| mstats avg(_value) WHERE index=mariadb_metrics AND metric_name="mariadb.mariadb_global_status_threads_connected" span=1m BY service_name
 ```
 
 ## Troubleshooting
@@ -278,10 +265,10 @@ index=main sourcetype=metrics metric_name="mariadb.mariadb_global_status_threads
 
 **Solution**:
 ```spl
-# Check all data from source
-index=* source=mariadbl_metrics_api
+# Preview raw metric data points from this source (metrics index)
+| mpreview index=mariadb_metrics filter="source=mariadbl_metrics_api"
 
-# Check HEC internal logs
+# Check HEC internal logs (events index)
 index=_internal sourcetype=splunkd component=HttpEventCollector
 ```
 
@@ -339,8 +326,8 @@ sudo journalctl -u mariadb-metrics.service -f
 
 ```spl
 # Alert if no metrics received in 5 minutes
-index=main sourcetype=metrics source=mariadbl_metrics_api
-| stats latest(_time) as last_event
+| mstats count WHERE index=mariadb_metrics AND metric_name="mariadb.*" span=1m
+| stats max(_time) as last_event
 | eval age=now()-last_event
 | where age > 300
 ```

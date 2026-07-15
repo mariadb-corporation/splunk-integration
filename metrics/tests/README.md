@@ -4,7 +4,7 @@ This directory contains unit tests for the MariaDB Cloud metrics integration.
 
 ## Test Coverage
 
-### Prometheus Parser Tests (`test_prometheus_parser.py`)
+### Prometheus Parser Tests (`test_metrics_collector.py`)
 
 Comprehensive tests for Prometheus format parsing:
 
@@ -44,23 +44,23 @@ Comprehensive tests for Prometheus format parsing:
 
 ### Run all tests:
 ```bash
-python3 metrics/tests/test_prometheus_parser.py
+python3 metrics/tests/test_metrics_collector.py
 ```
 
 ### Run with verbose output:
 ```bash
-python3 metrics/tests/test_prometheus_parser.py -v
+python3 metrics/tests/test_metrics_collector.py -v
 ```
 
 ### Run specific test:
 ```bash
-python3 metrics/tests/test_prometheus_parser.py TestPrometheusParser.test_simple_metric_without_labels
+python3 metrics/tests/test_metrics_collector.py TestPrometheusParser.test_simple_metric_without_labels
 ```
 
 ### Run from repository root:
 ```bash
 cd /path/to/splunk-integration
-python3 -m pytest metrics/tests/test_prometheus_parser.py -v
+python3 -m pytest metrics/tests/test_metrics_collector.py -v
 ```
 
 ## Test Results

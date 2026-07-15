@@ -6,11 +6,13 @@ Unit tests for Prometheus format parser in MariaDB metrics collector
 import unittest
 import sys
 import os
+from unittest import mock
 
 # Add parent directory to path to import the module
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from mariadb_metrics_input import MetricsCollector
+import mariadb_metrics_collector as mod
+from mariadb_metrics_collector import MetricsCollector
 
 
 class TestPrometheusParser(unittest.TestCase):
@@ -246,6 +248,63 @@ maxscale_server_connections{server="server2",state="Slave"} 5"""
         self.assertEqual(metrics[0]["labels"]["schema"], "test-db")
         self.assertEqual(metrics[0]["labels"]["table"], "user_data")
 
+    def test_label_value_with_closing_brace(self):
+        """A '}' inside a quoted label value must not truncate parsing."""
+        text = 'mysql_info{version="10.6}beta"} 1'
+
+        metrics = self.collector.parse_prometheus_format(text)
+
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["labels"], {"version": "10.6}beta"})
+        self.assertEqual(metrics[0]["value"], 1.0)
+
+    def test_label_value_with_closing_brace_and_more_labels(self):
+        """A '}' in one value still lets later labels and the value parse."""
+        text = 'mysql_info{a="x}y",b="z"} 42'
+
+        metrics = self.collector.parse_prometheus_format(text)
+
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["labels"], {"a": "x}y", "b": "z"})
+        self.assertEqual(metrics[0]["value"], 42.0)
+
+    def test_label_value_with_escaped_backslash(self):
+        """Escaped backslashes decode to a single backslash (\\\\ -> \\)."""
+        text = r'mysql_file{path="C:\\logs"} 1'
+
+        metrics = self.collector.parse_prometheus_format(text)
+
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["labels"], {"path": "C:\\logs"})
+
+    def test_label_value_with_escaped_quote(self):
+        """An escaped quote is decoded and does not end the value early."""
+        text = r'mysql_msg{text="say \"hi\""} 1'
+
+        metrics = self.collector.parse_prometheus_format(text)
+
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["labels"], {"text": 'say "hi"'})
+        self.assertEqual(metrics[0]["value"], 1.0)
+
+    def test_label_value_with_escaped_newline(self):
+        """An escaped newline (\\n) is decoded to a real newline."""
+        text = r'mysql_msg{text="line1\nline2"} 1'
+
+        metrics = self.collector.parse_prometheus_format(text)
+
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["labels"], {"text": "line1\nline2"})
+
+    def test_label_value_with_comma(self):
+        """A comma inside a quoted value is not treated as a label separator."""
+        text = 'mysql_info{list="a,b,c",count="2"} 1'
+
+        metrics = self.collector.parse_prometheus_format(text)
+
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["labels"], {"list": "a,b,c", "count": "2"})
+
 
 class TestHECTransformation(unittest.TestCase):
     """Test transformation to Splunk HEC format"""
@@ -304,6 +363,116 @@ class TestHECTransformation(unittest.TestCase):
         self.assertEqual(events[0]["fields"]["schema"], "test")
         self.assertEqual(events[0]["fields"]["table"], "users")
         self.assertEqual(events[0]["fields"]["metric_type"], "gauge")
+
+
+class TestConfigValidation(unittest.TestCase):
+    """Test numeric env-var parsing and validation in __init__"""
+
+    NUMERIC_VARS = (
+        "METRICS_BATCH_SIZE",
+        "METRICS_MAX_RETRIES",
+        "METRICS_RETRY_DELAY",
+    )
+
+    def setUp(self):
+        os.environ["MARIADB_API_KEY"] = "test-key"
+        os.environ["SPLUNK_HEC_URL"] = "https://test.splunkcloud.com:8088"
+        os.environ["SPLUNK_HEC_TOKEN"] = "test-token"
+        for var in self.NUMERIC_VARS:
+            os.environ.pop(var, None)
+
+    def tearDown(self):
+        for var in self.NUMERIC_VARS:
+            os.environ.pop(var, None)
+
+    def test_defaults_when_unset(self):
+        """Unset numeric vars fall back to their defaults."""
+        collector = MetricsCollector()
+        self.assertEqual(collector.batch_size, 100)
+        self.assertEqual(collector.max_retries, 3)
+        self.assertEqual(collector.retry_delay, 5)
+
+    def test_valid_numeric_env_parsed(self):
+        """A valid numeric override is applied."""
+        os.environ["METRICS_BATCH_SIZE"] = "250"
+        collector = MetricsCollector()
+        self.assertEqual(collector.batch_size, 250)
+
+    def test_non_numeric_env_raises_clear_error(self):
+        """A non-numeric value fails fast with a message naming the var."""
+        os.environ["METRICS_BATCH_SIZE"] = "1oo"
+        with self.assertRaises(ValueError) as ctx:
+            MetricsCollector()
+        self.assertIn("METRICS_BATCH_SIZE", str(ctx.exception))
+
+    def test_whitespace_padded_value_still_parses(self):
+        """int() tolerates surrounding whitespace, so this must still work."""
+        os.environ["METRICS_BATCH_SIZE"] = " 100 "
+        collector = MetricsCollector()
+        self.assertEqual(collector.batch_size, 100)
+
+    def test_zero_batch_size_rejected(self):
+        """batch_size must be >= 1 (a 0 batch would send nothing)."""
+        os.environ["METRICS_BATCH_SIZE"] = "0"
+        with self.assertRaises(ValueError):
+            MetricsCollector()
+
+    def test_negative_retry_delay_rejected(self):
+        """retry_delay must be >= 0."""
+        os.environ["METRICS_RETRY_DELAY"] = "-1"
+        with self.assertRaises(ValueError):
+            MetricsCollector()
+
+
+class TestDaemonInterval(unittest.TestCase):
+    """Test that run_daemon guards against a zero/negative interval"""
+
+    def setUp(self):
+        os.environ["MARIADB_API_KEY"] = "test-key"
+        os.environ["SPLUNK_HEC_URL"] = "https://test.splunkcloud.com:8088"
+        os.environ["SPLUNK_HEC_TOKEN"] = "test-token"
+        mod.shutdown_requested = False
+
+    def tearDown(self):
+        mod.shutdown_requested = False
+
+    def _run_daemon_capturing_sleeps(self, interval):
+        """Run run_daemon with run()/sleep/signal mocked; return sleep args."""
+        state = {"runs": 0}
+        sleeps = []
+
+        def fake_run(_self):
+            state["runs"] += 1
+            # Request shutdown on the 2nd cycle so the between-cycle sleep of
+            # the 1st cycle executes and can be observed, then the loop ends.
+            if state["runs"] >= 2:
+                mod.shutdown_requested = True
+            return 0
+
+        with mock.patch.object(mod.MetricsCollector, "run", fake_run), mock.patch.object(
+            mod.time, "sleep", lambda secs: sleeps.append(secs)
+        ), mock.patch.object(mod.signal, "signal"):
+            mod.run_daemon(interval=interval)
+
+        return sleeps, state["runs"]
+
+    def test_zero_interval_is_clamped_and_does_not_busy_loop(self):
+        """interval=0 must be clamped to a 1s sleep, not skip sleeping."""
+        sleeps, runs = self._run_daemon_capturing_sleeps(interval=0)
+
+        # The between-cycle sleep must have run at 1s (clamped), never 0s.
+        self.assertIn(1, sleeps)
+        self.assertNotIn(0, sleeps)
+        # Only the two cycles we allowed ran — no runaway looping.
+        self.assertEqual(runs, 2)
+
+    def test_positive_interval_preserved(self):
+        """A normal interval sleeps in 1s increments up to the interval."""
+        sleeps, runs = self._run_daemon_capturing_sleeps(interval=3)
+
+        # One completed cycle sleeps 3 x 1s before the shutdown-ending cycle.
+        self.assertEqual(sleeps, [1, 1, 1])
+        self.assertEqual(runs, 2)
 
 
 if __name__ == "__main__":

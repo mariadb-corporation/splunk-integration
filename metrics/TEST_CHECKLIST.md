@@ -7,7 +7,8 @@ This checklist guides you through testing the MariaDB Cloud metrics integration 
 - [ ] Python 3.7+ installed
 - [ ] `requests` library installed (`pip3 install requests`)
 - [ ] MariaDB Cloud API key available
-- [ ] Splunk Cloud HEC token created
+- [ ] Splunk Cloud **Metrics-type** index created (e.g. `mariadb_metrics`) — not an Events/log index
+- [ ] Splunk Cloud HEC token created with write access to that metrics index
 - [ ] Network connectivity to both APIs
 
 ## Test 1: Verify Python Dependencies
@@ -35,7 +36,7 @@ curl -H "X-Api-Key: YOUR_MARIADB_API_KEY" \
 
 ```bash
 # Replace with your actual HEC token
-curl -k https://inputs.prd-p-29k1h.splunkcloud.com:8088/services/collector \
+curl -k https://inputs.your-instance.splunkcloud.com:8088/services/collector \
      -H "Authorization: Splunk YOUR_HEC_TOKEN" \
      -d '{"event":"test","sourcetype":"manual","source":"test"}'
 
@@ -49,9 +50,9 @@ curl -k https://inputs.prd-p-29k1h.splunkcloud.com:8088/services/collector \
 ```bash
 export MARIADB_API_KEY="your-actual-api-key"
 export MARIADB_API_URL="https://api.skysql.com"
-export SPLUNK_HEC_URL="https://inputs.prd-p-29k1h.splunkcloud.com:8088"
+export SPLUNK_HEC_URL="https://inputs.your-instance.splunkcloud.com:8088"
 export SPLUNK_HEC_TOKEN="your-actual-hec-token"
-export SPLUNK_INDEX="main"
+export SPLUNK_INDEX="mariadb_metrics"
 export SPLUNK_SOURCE="mariadbl_metrics_api"
 export SPLUNK_SOURCETYPE="metrics"
 ```
@@ -65,15 +66,15 @@ echo $SPLUNK_HEC_TOKEN
 ## Test 5: Run Python Script Directly
 
 ```bash
-cd /Users/nedyalko.petrov/Documents/SkySQL/skyrepos/splunk-integration
-python3 scripts/mariadb_metrics_input.py
+cd <target-dir>/splunk-integration
+python3 metrics/scripts/mariadb_metrics_collector.py
 ```
 
 **Expected Output:**
 ```
 INFO: Configuration validated successfully
 INFO: MariaDB Cloud API URL: https://api.skysql.com
-INFO: Splunk HEC URL: https://inputs.prd-p-29k1h.splunkcloud.com:8088
+INFO: Splunk HEC URL: https://inputs.your-instance.splunkcloud.com:8088
 INFO: Starting MariaDB Cloud metrics collection
 INFO: Fetching metrics from MariaDB Cloud API (attempt 1/3)
 INFO: Successfully fetched metrics (XXXX bytes)
@@ -93,17 +94,17 @@ INFO: Metrics collection completed successfully
 ## Test 6: Run Wrapper Script
 
 ```bash
-cd /Users/nedyalko.petrov/Documents/SkySQL/skyrepos/splunk-integration
-./scripts/mariadb_metrics_wrapper.sh
+cd <target-dir>/splunk-integration
+./metrics/scripts/mariadb_metrics_wrapper.sh
 ```
 
 **Expected:** Same output as Test 5, plus wrapper script logging
 
 ## Test 7: Verify Splunk Data
 
-```bash
-# Search in Splunk for recent metrics
-index=main sourcetype=metrics source=mariadbl_metrics_api earliest=-5m
+```spl
+# Preview recent metric data points (metrics index → use mpreview)
+| mpreview index=mariadb_metrics filter="source=mariadbl_metrics_api" earliest=-5m
 ```
 
 **Expected:**
@@ -118,18 +119,20 @@ index=main sourcetype=metrics source=mariadbl_metrics_api earliest=-5m
 
 Log into your Splunk Cloud instance and run these searches:
 
+> **Note:** `mariadb_metrics` is a **Metrics-type index**, so these use the
+> metrics search commands (`mstats` / `mpreview` / `mcatalog`) rather than the
+> event-style `index=… | stats/timechart` pipeline.
+
 ### Search 1: Check if data is arriving
 ```spl
-index=main sourcetype=metrics source=mariadbl_metrics_api
-| stats count
+| mstats count WHERE index=mariadb_metrics AND source=mariadbl_metrics_api AND metric_name="mariadb.*"
 ```
 
 **Expected:** Count > 0
 
 ### Search 2: View metric names
 ```spl
-index=main sourcetype=metrics source=mariadbl_metrics_api
-| stats count by metric_name
+| mstats count WHERE index=mariadb_metrics AND source=mariadbl_metrics_api AND metric_name="mariadb.*" BY metric_name
 | sort - count
 ```
 
@@ -137,15 +140,14 @@ index=main sourcetype=metrics source=mariadbl_metrics_api
 
 ### Search 3: View a specific metric over time
 ```spl
-index=main sourcetype=metrics metric_name="mariadb.mariadb_server_cpu"
-| timechart avg(_value) by server_name
+| mstats avg(_value) WHERE index=mariadb_metrics AND metric_name="mariadb.mariadb_server_cpu" span=1m BY server_name
 ```
 
-**Expected:** Time chart showing CPU usage
+**Expected:** Time series showing CPU usage
 
 ### Search 4: Check all dimensions
 ```spl
-index=main sourcetype=metrics source=mariadbl_metrics_api
+| mpreview index=mariadb_metrics filter="source=mariadbl_metrics_api"
 | head 1
 | transpose
 ```
@@ -157,7 +159,7 @@ index=main sourcetype=metrics source=mariadbl_metrics_api
 ### Test with Invalid API Key
 ```bash
 export MARIADB_API_KEY="invalid-key"
-python3 scripts/mariadb_metrics_input.py
+python3 metrics/scripts/mariadb_metrics_collector.py
 ```
 
 **Expected:** Error message about authentication failure
@@ -166,7 +168,7 @@ python3 scripts/mariadb_metrics_input.py
 ```bash
 export MARIADB_API_KEY="your-valid-key"
 export SPLUNK_HEC_TOKEN="invalid-token"
-python3 scripts/mariadb_metrics_input.py
+python3 metrics/scripts/mariadb_metrics_collector.py
 ```
 
 **Expected:** Error message about HEC authentication failure
@@ -175,9 +177,9 @@ python3 scripts/mariadb_metrics_input.py
 
 ```bash
 # Run script twice to verify consistency
-./scripts/mariadb_metrics_wrapper.sh
+./metrics/scripts/mariadb_metrics_wrapper.sh
 sleep 5
-./scripts/mariadb_metrics_wrapper.sh
+./metrics/scripts/mariadb_metrics_wrapper.sh
 ```
 
 **Expected:** Both runs complete successfully with metrics sent to Splunk

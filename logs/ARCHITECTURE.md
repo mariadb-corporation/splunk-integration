@@ -1,376 +1,225 @@
-# SkySQL Logs API - Splunk Integration Architecture
+# MariaDB Cloud Logs API - Splunk Integration Architecture
 
 ## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           SkySQL Cloud Platform                         │
+│                           MariaDB Cloud Platform                        │
 │                                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │
-│  │   MariaDB    │  │   MariaDB    │  │   MaxScale   │                │
-│  │   Server 1   │  │   Server 2   │  │    Proxy     │                │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                │
-│         │                  │                  │                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
+│  │   MariaDB    │  │   MariaDB    │  │   MaxScale   │                   │
+│  │   Server 1   │  │   Server 2   │  │    Proxy     │                   │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                   │
 │         └──────────────────┴──────────────────┘                         │
-│                            │                                            │
 │                            ▼                                            │
-│                  ┌──────────────────┐                                  │
-│                  │  Log Collector   │                                  │
-│                  │   & Storage      │                                  │
-│                  └────────┬─────────┘                                  │
-│                           │                                            │
-│                           ▼                                            │
-│                  ┌──────────────────┐                                  │
-│                  │  SkySQL Logs API │                                  │
-│                  │  (REST API v2)   │                                  │
-│                  └────────┬─────────┘                                  │
+│                  ┌──────────────────┐                                   │
+│                  │ MariaDB Logs API │  (REST API v2)                    │
+│                  └────────┬─────────┘                                   │
 └───────────────────────────┼─────────────────────────────────────────────┘
-                            │
-                            │ HTTPS
-                            │ X-API-KEY: <your-key>
-                            │
+                            │ HTTPS  (X-API-KEY: <your-key>)
                             ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    Customer Infrastructure                              │
+│                    Collector Host (VM / container / pod)                │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐ │
-│  │           Splunk Universal Forwarder Host                         │ │
-│  │                                                                   │ │
-│  │  ┌─────────────────────────────────────────────────────────────┐ │ │
-│  │  │  Scripted Input (runs every 5 minutes)                      │ │ │
-│  │  │                                                              │ │ │
-│  │  │  ┌────────────────────────────────────────────────────────┐ │ │ │
-│  │  │  │  skysql_logs_wrapper.sh                                │ │ │ │
-│  │  │  │  • Sets environment variables                          │ │ │ │
-│  │  │  │  • SKYSQL_API_KEY                                      │ │ │ │
-│  │  │  │  • SKYSQL_API_URL                                      │ │ │ │
-│  │  │  │  • CHECKPOINT_FILE                                     │ │ │ │
-│  │  │  └──────────────────┬─────────────────────────────────────┘ │ │ │
-│  │  │                     │                                        │ │ │
-│  │  │                     ▼                                        │ │ │
-│  │  │  ┌────────────────────────────────────────────────────────┐ │ │ │
-│  │  │  │  skysql_logs_input.py                                  │ │ │ │
-│  │  │  │                                                        │ │ │ │
-│  │  │  │  1. Load checkpoint (last run timestamp)              │ │ │ │
-│  │  │  │  2. Calculate time range (last_run to now)            │ │ │ │
-│  │  │  │  3. POST to /observability/v2/logs/query              │ │ │ │
-│  │  │  │     with pagination (limit=1000, offset=0...)         │ │ │ │
-│  │  │  │  4. Parse JSON response                               │ │ │ │
-│  │  │  │  5. Output events to stdout in JSON format            │ │ │ │
-│  │  │  │  6. Save checkpoint (current timestamp)               │ │ │ │
-│  │  │  │                                                        │ │ │ │
-│  │  │  │  Output format:                                        │ │ │ │
-│  │  │  │  {                                                     │ │ │ │
-│  │  │  │    "time": "2024-01-01T12:00:00Z",                    │ │ │ │
-│  │  │  │    "source": "skysql_logs_api",                       │ │ │ │
-│  │  │  │    "sourcetype": "skysql:logs",                       │ │ │ │
-│  │  │  │    "event": { <log data> }                            │ │ │ │
-│  │  │  │  }                                                     │ │ │ │
-│  │  │  └──────────────────┬─────────────────────────────────────┘ │ │ │
-│  │  │                     │ stdout                                 │ │ │
-│  │  └─────────────────────┼────────────────────────────────────────┘ │ │
-│  │                        │                                          │ │
-│  │                        ▼                                          │ │
-│  │  ┌─────────────────────────────────────────────────────────────┐ │ │
-│  │  │  Splunk Universal Forwarder                                 │ │ │
-│  │  │                                                              │ │ │
-│  │  │  • Captures stdout from script                             │ │ │
-│  │  │  • Applies props.conf (JSON parsing, field extraction)     │ │ │
-│  │  │  • Adds metadata (index, sourcetype, source)               │ │ │
-│  │  │  • Forwards to indexers via TCP/9997                       │ │ │
-│  │  └──────────────────┬──────────────────────────────────────────┘ │ │
-│  └────────────────────┼──────────────────────────────────────────────┘ │
-│                       │ TCP/9997 (compressed)                          │
-└───────────────────────┼────────────────────────────────────────────────┘
-                        │
-                        ▼
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │  mariadb_logs_collector.py  (MariaDBLogsCollector)                │  │
+│  │                                                                   │  │
+│  │  1. Load checkpoint (per-archive last_timestamp)                  │  │
+│  │  2. POST /observability/v2/logs/query   (metadata, paginated)     │  │
+│  │  3. GET  /observability/v2/logs/archive (download zip per log)    │  │
+│  │  4. Parse lines, skip those <= checkpoint (dedup)                 │  │
+│  │  5. Transform each line → Splunk HEC event                        │  │
+│  │  6. POST batches → Splunk HEC /services/collector                 │  │
+│  │  7. Save checkpoint per archive (after that archive is sent)      │  │
+│  │                                                                   │  │
+│  │  Run modes: once (default) or --daemon --interval N               │  │
+│  └──────────────────┬────────────────────────────────────────────────┘  │
+└─────────────────────┼───────────────────────────────────────────────────┘
+                      │ HTTPS  (Authorization: Splunk <hec-token>)
+                      ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Splunk Infrastructure                           │
+│                    Splunk Cloud Platform                                │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐ │
-│  │  Splunk Indexer(s)                                                │ │
-│  │                                                                   │ │
-│  │  • Receives events from forwarders                               │ │
-│  │  • Indexes logs in skysql_logs index                             │ │
-│  │  • Stores with timestamp, metadata, and full event data          │ │
-│  │  • Makes searchable via SPL (Search Processing Language)         │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │  HTTP Event Collector (HEC)                                       │  │
+│  │  • Receives JSON events, routes to the target index (mariadb_logs)│  │
+│  │  • Applies sourcetype (mariadb:logs) parsing / field extractions  │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  ┌───────────────────────────────────────────────────────────────────┐ │
-│  │  Splunk Search Head(s)                                            │ │
-│  │                                                                   │ │
-│  │  • Search interface for users                                    │ │
-│  │  • Dashboards and visualizations                                 │ │
-│  │  • Alerting and reporting                                        │ │
-│  │  • Field extractions and data enrichment                         │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
+│  Search Heads: SPL search, dashboards, alerting                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Data Flow
 
-### 1. Log Generation
-```
-MariaDB/MaxScale → Log Files → SkySQL Log Collector → SkySQL Logs API
-```
-
-### 2. API Polling (Every 5 minutes)
-```
-Script reads checkpoint → Calculates time range → Calls API → Receives JSON
-```
-
-### 3. Event Processing
-```
-Parse JSON → Format for Splunk → Output to stdout → Forwarder captures
-```
-
-### 4. Forwarding
-```
-Forwarder → Apply parsing rules → Add metadata → Forward to indexers
-```
-
-### 5. Indexing & Search
-```
-Indexer stores → Search head queries → Users search/alert/visualize
-```
+1. **Log Generation** — MariaDB/MaxScale → MariaDB Cloud Log Collector → MariaDB Cloud Logs API.
+2. **Polling** — the collector loads its checkpoint, queries log metadata for the time window (00:00 UTC today → now), and downloads each log archive.
+3. **Parse & Dedup** — each archive (zip) is unpacked; lines older than the archive's saved `last_timestamp` are skipped.
+4. **Transform** — each remaining line becomes a Splunk HEC event `{time, source, sourcetype, index, event:{...}}`.
+5. **Send** — each archive's events are POSTed to the Splunk HEC endpoint in batches, with retry/backoff.
+6. **Checkpoint** — the checkpoint is written **per archive**, immediately after that archive's events are delivered (advancing its `last_timestamp`). A mid-cycle send failure stops the cycle without re-sending archives already delivered this cycle.
+7. **Index & Search** — HEC ingests to the target index; users search/alert/visualize via SPL.
 
 ## Component Details
 
-### Python Script (skysql_logs_input.py)
+### Python Script (`mariadb_logs_collector.py`)
 
-**Responsibilities:**
-- Maintain checkpoint file to track last successful run
-- Calculate appropriate time range for API query
-- Handle pagination for large result sets
-- Format output as JSON for Splunk consumption
-- Implement rate limiting to respect API quotas
-- Error handling and logging
+The `MariaDBLogsCollector` class encapsulates all behavior. Key methods:
 
-**Key Functions:**
 ```python
-load_checkpoint()      # Read last run timestamp
-save_checkpoint()      # Save current run timestamp
-fetch_log_metadata()   # Fetch log metadata from SkySQL API
-fetch_log_archive()    # Download log archive
-parse_log_archive()    # Parse log archive
-main()                 # Orchestrate the polling process
+load_checkpoint() / save_checkpoint()    # per-archive dedup state
+fetch_servers()                          # serverContext for the query
+fetch_log_metadata()                     # POST /observability/v2/logs/query
+fetch_log_archive()                      # GET  /observability/v2/logs/archive
+parse_log_archive()                      # unzip + per-line parse + dedup skip
+transform_to_hec_events()                # log line → HEC event dict
+send_to_splunk_hec()                     # batched POST to HEC with retry
+run()                                    # one collection cycle
+run_daemon()                             # continuous polling + graceful shutdown
 ```
 
-**API Request Format:**
-```json
-POST /observability/v2/logs/query
-Headers:
-  X-API-KEY: <your-api-key>
-  Content-Type: application/json
+**Diagnostics** go to the `logging` module (stderr). Unlike the previous
+forwarder-based design, **stdout is not a data channel** — events travel over
+HTTP to HEC.
 
-Body:
+**API request format** (`POST /observability/v2/logs/query`):
+```json
 {
-  "fromDate": "2024-01-01T00:00:00Z",
-  "toDate": "2024-01-01T01:00:00Z",
-  "limit": 1000,
+  "fromDate": "2026-01-12T00:00:00Z",
+  "toDate": "2026-01-12T22:34:56Z",
+  "limit": 100,
   "offset": 0,
+  "logTypes": ["error-log", "audit-log", "maxscale-log"],
   "orderByField": "startTime",
-  "orderByDirection": "asc"
+  "orderByDirection": "asc",
+  "serverContext": ["<serverDataSourceId>", "..."]
 }
 ```
 
-**API Response Format:**
+**HEC event format** (one per log line):
 ```json
 {
-  "count": 1500,
-  "logs": [
-    {
-      "id": "123",
-      "startTime": "2024-01-01T00:30:00Z",
-      "logType": "error-log",
-      "server": "server-1",
-      "service": "service-1",
-      "serverDataSourceId": "ds-123",
-      "message": "Error message here",
-      "filename": "error.log"
-    },
-    ...
-  ]
+  "time": 1767916800.123,
+  "source": "mariadb_logs_api",
+  "sourcetype": "mariadb:logs",
+  "index": "mariadb_logs",
+  "event": {
+    "message": "...",
+    "filename": "error.log",
+    "logType": "error-log",
+    "log.level": "Warning",
+    "server": "server-1",
+    "service": "service-1",
+    "serverDataSourceId": "ds-123"
+  }
 }
 ```
+The HEC `time` field is **epoch seconds**, converted from each line's ISO-8601
+timestamp (fractional seconds beyond microseconds, e.g. MaxScale nanoseconds,
+are truncated).
 
-### Splunk Configuration
+### Splunk-side configuration
 
-**inputs.conf:**
-```ini
-[script://$SPLUNK_HOME/etc/apps/splunk-skysql-integration/scripts/skysql_logs_wrapper.sh]
-disabled = false
-index = skysql_logs
-interval = 300
-sourcetype = skysql:logs
-source = skysql_logs_api
-```
-
-**props.conf:**
-```ini
-[skysql:logs]
-SHOULD_LINEMERGE = false
-KV_MODE = json
-INDEXED_EXTRACTIONS = json
-TIME_PREFIX = "timestamp"\s*:\s*"
-TIME_FORMAT = %Y-%m-%dT%H:%M:%S.%3NZ
-```
-
-**outputs.conf:**
-```ini
-[tcpout]
-defaultGroup = skysql_indexers
-
-[tcpout:skysql_indexers]
-server = indexer.example.com:9997
-compressed = true
-```
+Because there is no forwarder, index-time/search-time field extractions must be
+configured on the Splunk Cloud side. `logs/default/props.conf` is kept in the
+repo **as a reference** — install its `[mariadb:logs]` stanza on the search
+head/indexer if you want the field extractions. Events are JSON, so `KV_MODE`
+makes the fields available without extra configuration. Note that HEC unwraps
+the `event` envelope, so the extracted fields are the top-level keys
+(`message`, `logType`, `server`, …) — there is **no** `event.` prefix in SPL.
 
 ## Checkpoint Mechanism
 
-The scripted input persists state to a JSON checkpoint file to reduce duplicate ingestion across polling cycles and restarts.
+The collector persists state to a JSON checkpoint file to avoid re-ingesting
+log lines across polling cycles and restarts.
 
 ### Location / configuration
 
-- The checkpoint path is controlled by the `CHECKPOINT_FILE` environment variable.
-- Default path (if not set): `/opt/splunkforwarder/var/lib/splunk/skysql_checkpoint.json`
-- The wrapper script (`scripts/skysql_logs_wrapper.sh`) typically exports `CHECKPOINT_FILE`.
+- Path is controlled by the `CHECKPOINT_FILE` environment variable.
+- Default: `./mariadb_checkpoint.json` (point it at a durable path in production,
+  e.g. `/var/lib/mariadb-logs/mariadb_checkpoint.json` or a mounted volume).
 
 ### Checkpoint file format
 
-The script stores the last queried time window plus per-log-archive progress:
-
-┌───────────────────────────────────────────────────────────────────────────┐
-│ Checkpoint file: /opt/splunkforwarder/var/lib/splunk/skysql_checkpoint.json│
-│                                                                           │
-│ {                                                                         │
-│   "startTime": "2026-01-12T00:00:00Z",                                    │
-│   "endTime":   "2026-01-12T22:34:56.123Z",                                │
-│   "logs_stat": {                                                         │
-│     "<log_id_1>": { "last_timestamp": "2026-01-12T22:33:01.000Z" },       │
-│     "<log_id_2>": { "last_timestamp": "2026-01-12T22:33:45.000Z" }        │
-│   }                                                                       │
-│ }                                                                         │
-└───────────────────────────────────────────────────────────────────────────┘
+```json
+{
+  "startTime": "2026-01-12T00:00:00Z",
+  "endTime":   "2026-01-12T22:34:56.123Z",
+  "logs_stat": {
+    "<log_id_1>": { "last_timestamp": "2026-01-12T22:33:01.000Z" },
+    "<log_id_2>": { "last_timestamp": "2026-01-12T22:33:45.000Z" }
+  }
+}
+```
 
 ### How it prevents duplicates
 
-- For each returned log archive `id`, the script downloads the zip (`/observability/v2/logs/archive`), parses individual log lines, and extracts a per-line `timestamp`.
-- When parsing an archive, the script compares each line’s `timestamp` to the saved `logs_stat[log_id].last_timestamp` and **skips** lines older than the last recorded timestamp for that `log_id`.
-- After processing, it updates `logs_stat[log_id].last_timestamp` to the newest timestamp seen for that archive and saves the checkpoint.
-
-### Initial run / fallback behavior
-
-- If the checkpoint file is missing or cannot be read, the script initializes:
-  - `startTime` = **00:00:00 UTC today**
-  - `endTime` = **current UTC time**
-  - `logs_stat` = empty object
+- For each archive `id`, `parse_log_archive` extracts a per-line `timestamp` and
+  **skips** lines strictly older than the seed `logs_stat[id].last_timestamp`.
+  The seed is treated as immutable during parsing; the new value returned is the
+  **maximum** timestamp seen (not the last line processed), so out-of-order lines
+  are not dropped. Lines with no parseable timestamp inherit the previous line's.
+- The checkpoint is written **per archive**, immediately after that archive's
+  events are delivered to HEC, so a mid-cycle failure is retried on the next
+  cycle without re-sending already-delivered archives (at-least-once delivery).
+  The boundary line (timestamp equal to the seed) may be re-sent.
 
 ### Retention / pruning
 
-- Before writing the checkpoint, the script prunes `logs_stat` entries whose `last_timestamp` is more than **2 days older than** `startTime` (to prevent unbounded growth).
+- Before writing, `save_checkpoint` prunes `logs_stat` entries whose
+  `last_timestamp` is more than **2 days older** than `startTime`.
 
 ### Note on time windows
 
-- The script does **not** currently advance `startTime` as “last_run → next fromDate”. Instead, each polling cycle resets `startTime` to **00:00 UTC today** and relies on `logs_stat[log_id].last_timestamp` to avoid re-ingesting older lines within each archive.
+- Each cycle resets `startTime` to **00:00 UTC today** rather than advancing a
+  sliding window; dedup relies on `logs_stat[log_id].last_timestamp`.
+
+## Deployment Patterns
+
+Run the collector as a persistent daemon (`--daemon --interval N`) managed by
+systemd, launchd, or Kubernetes. See [`examples/`](examples/) for ready-to-use
+configurations.
+
+- **Single collector** → all MariaDB Cloud logs → one Splunk Cloud index. Keep a
+  single instance per checkpoint so the file is not written concurrently.
+- **Multi-environment** → run separate collectors with different API keys and
+  `SPLUNK_INDEX`/`CHECKPOINT_FILE` values (e.g. prod/staging/dev).
+
+## Monitoring & Observability
+
+Monitor the collector process logs (stderr / journald / pod logs) and data
+freshness in Splunk:
+
+```spl
+# Data ingestion rate
+index=mariadb_logs sourcetype=mariadb:logs
+| timechart span=5m count
+
+# Data freshness (lag between log time and index time)
+index=mariadb_logs sourcetype=mariadb:logs
+| eval lag = _indextime - _time
+| stats avg(lag) as avg_lag_seconds
+
+# HEC health (Splunk internal)
+index=_internal sourcetype=splunkd component=HttpEventCollector
+```
 
 ## Security Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Security Layers                                         │
-├─────────────────────────────────────────────────────────┤
-│  1. API Authentication                                  │
-│     • X-API-KEY header (Bearer token)                   │
-│     • Keys generated in SkySQL Portal                   │
-│     • Scoped permissions per key                        │
-│                                                          │
-│  2. Transport Security                                  │
-│     • HTTPS/TLS for all API calls                       │
-│     • Certificate validation                            │
-│                                                          │
-│  3. Credential Storage                                  │
-│     • Environment variables (not in code)               │
-│     • File permissions (600, owned by splunk user)      │
-│     • Optional: Splunk credential storage               │
-│                                                          │
-│  4. Network Security                                    │
-│     • Forwarder → Indexer: TCP/9997 (optionally SSL)    │
-│     • Firewall rules for outbound HTTPS                 │
-│                                                          │
-│  5. Access Control                                      │
-│     • Splunk RBAC for index access                      │
-│     • Script runs as splunk user (limited privileges)   │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  Security Layers                                               │
+├────────────────────────────────────────────────────────────────┤
+│  1. MariaDB Cloud API Authentication                           │
+│     • X-API-KEY header; keys scoped in the MariaDB Cloud Portal│
+│  2. Splunk HEC Authentication                                  │
+│     • Authorization: Splunk <token>; scoped to an index        │
+│  3. Transport Security                                         │
+│     • HTTPS/TLS for both API and HEC calls                     │
+│     • SPLUNK_HEC_VERIFY_SSL controls HEC cert validation       │
+│  4. Credential Storage                                         │
+│     • Environment variables / secrets (not in code)            │
+│  5. Access Control                                             │
+│     • Splunk RBAC for index access                             │
+└────────────────────────────────────────────────────────────────┘
 ```
-
-## Monitoring & Observability
-
-### What to Monitor
-
-1. **Script Execution**
-   - Check splunkd.log for script errors
-   - Monitor checkpoint file updates
-   - Track log ingestion rate
-
-2. **API Health**
-   - Response times
-   - Error rates
-   - Rate limiting events
-
-3. **Data Freshness**
-   - Time between log generation and indexing
-   - Gap detection in timestamps
-
-4. **Resource Usage**
-   - Forwarder CPU/memory
-   - Network bandwidth
-   - Disk space for checkpoint
-
-### Splunk Searches for Monitoring
-
-```spl
-# Script execution status
-index=_internal source=*splunkd.log* skysql
-| stats count by log_level
-
-# Data ingestion rate
-index=skysql_logs
-| timechart span=5m count
-
-# Data freshness (lag between log time and index time)
-index=skysql_logs
-| eval lag = _indextime - _time
-| stats avg(lag) as avg_lag_seconds
-```
-
-## Deployment Patterns
-
-### Single Forwarder
-```
-One forwarder → All SkySQL logs → One or more indexers
-```
-**Use Case**: Small to medium deployments, single SkySQL account
-
-### Multiple Forwarders with Filtering
-```
-Forwarder 1 → Error logs only → Indexer pool
-Forwarder 2 → MaxScale logs only → Indexer pool
-Forwarder 3 → All other logs → Indexer pool
-```
-**Use Case**: High volume, need to distribute load
-
-### Multi-Environment
-```
-Forwarder 1 (Prod API key) → index=skysql_prod
-Forwarder 2 (Staging API key) → index=skysql_staging
-Forwarder 3 (Dev API key) → index=skysql_dev
-```
-**Use Case**: Multiple SkySQL environments
-
-### High Availability
-```
-Forwarder 1 (Primary) → Indexer cluster
-Forwarder 2 (Standby) → Indexer cluster
-```
-**Use Case**: Mission-critical monitoring, no data loss tolerance

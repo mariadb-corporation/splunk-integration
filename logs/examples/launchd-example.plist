@@ -3,40 +3,46 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mariadb.metrics</string>
-    
+    <string>com.mariadb.logs</string>
+
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/path/to/splunk-integration/metrics/scripts/mariadb_metrics_collector.py</string>
+        <string>/path/to/splunk-integration/logs/scripts/mariadb_logs_collector.py</string>
         <string>--daemon</string>
         <string>--interval</string>
-        <string>60</string>
+        <string>300</string>
     </array>
-    
+
     <key>EnvironmentVariables</key>
     <dict>
         <key>MARIADB_API_KEY</key>
         <string>your-mariadb-api-key</string>
         <key>MARIADB_API_URL</key>
         <string>https://api.skysql.com</string>
+        <key>CHECKPOINT_FILE</key>
+        <string>/usr/local/var/mariadb-logs/mariadb_checkpoint.json</string>
         <key>SPLUNK_HEC_TOKEN</key>
         <string>your-splunk-hec-token</string>
         <key>SPLUNK_HEC_URL</key>
         <string>https://inputs.your-instance.splunkcloud.com:8088</string>
         <key>SPLUNK_HEC_VERIFY_SSL</key>
         <string>true</string>
+        <key>SPLUNK_INDEX</key>
+        <string>mariadb_logs</string>
+        <key>SPLUNK_SOURCETYPE</key>
+        <string>mariadb:logs</string>
     </dict>
-    
+
     <key>KeepAlive</key>
     <true/>
-    
+
     <key>StandardOutPath</key>
-    <string>/var/log/mariadb_metrics.log</string>
-    
+    <string>/var/log/mariadb_logs.log</string>
+
     <key>StandardErrorPath</key>
-    <string>/var/log/mariadb_metrics.error.log</string>
-    
+    <string>/var/log/mariadb_logs.error.log</string>
+
     <key>RunAtLoad</key>
     <true/>
 </dict>

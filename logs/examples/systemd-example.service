@@ -1,5 +1,5 @@
 [Unit]
-Description=MariaDB Cloud Metrics Collector for Splunk (Daemon Mode)
+Description=MariaDB Cloud Logs Collector for Splunk (Daemon Mode)
 After=network.target
 
 [Service]
@@ -9,10 +9,13 @@ Restart=always
 RestartSec=10
 Environment="MARIADB_API_KEY=your-mariadb-api-key"
 Environment="MARIADB_API_URL=https://api.skysql.com"
+Environment="CHECKPOINT_FILE=/var/lib/mariadb-logs/mariadb_checkpoint.json"
 Environment="SPLUNK_HEC_TOKEN=your-splunk-hec-token"
 Environment="SPLUNK_HEC_URL=https://inputs.your-instance.splunkcloud.com:8088"
 Environment="SPLUNK_HEC_VERIFY_SSL=true"
-ExecStart=/usr/bin/python3 /opt/splunk-integration/metrics/scripts/mariadb_metrics_collector.py --daemon --interval 60
+Environment="SPLUNK_INDEX=mariadb_logs"
+Environment="SPLUNK_SOURCETYPE=mariadb:logs"
+ExecStart=/usr/bin/python3 /opt/splunk-integration/logs/scripts/mariadb_logs_collector.py --daemon --interval 300
 StandardOutput=journal
 StandardError=journal
 

@@ -30,7 +30,7 @@ data:
   MARIADB_API_URL: "https://api.skysql.com"
   SPLUNK_HEC_URL: "https://inputs.your-instance.splunkcloud.com:8088"
   SPLUNK_HEC_VERIFY_SSL: "true"
-  SPLUNK_INDEX: "main"
+  SPLUNK_INDEX: "mariadb_metrics"
   SPLUNK_SOURCE: "mariadbl_metrics_api"
   SPLUNK_SOURCETYPE: "metrics"
   METRICS_BATCH_SIZE: "100"
@@ -75,7 +75,7 @@ spec:
               pip install --quiet --no-cache-dir requests
               
               echo "Running metrics collection..."
-              python3 /scripts/mariadb_metrics_input.py
+              python3 /scripts/mariadb_metrics_collector.py
               
               echo "Metrics collection completed successfully"
             env:
