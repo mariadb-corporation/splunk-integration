@@ -1,0 +1,322 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  MariaDB Cloud -> Splunk collectors (metrics + logs) on AWS Lambda,
+  scheduled by EventBridge Scheduler. Secrets come from Secrets Manager; the
+  logs collector's dedup checkpoint is stored in S3.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: mariadb-splunk
+    Description: Prefix for all created resource names.
+  Runtime:
+    Type: String
+    Default: python3.12
+  CodeBucket:
+    Type: String
+    Description: S3 bucket holding the deployment zips (uploaded by build.sh output).
+  MetricsCodeKey:
+    Type: String
+    Default: metrics_lambda.zip
+  LogsCodeKey:
+    Type: String
+    Default: logs_lambda.zip
+  MetricsSecretArn:
+    Type: String
+    Description: Secrets Manager ARN with JSON creds for the metrics collector.
+  LogsSecretArn:
+    Type: String
+    Description: Secrets Manager ARN with JSON creds for the logs collector.
+  SplunkHecUrl:
+    Type: String
+    Description: Splunk HEC endpoint URL (without path).
+  MariaDbApiUrl:
+    Type: String
+    Default: https://api.skysql.com
+  SplunkIndexMetrics:
+    Type: String
+    Default: mariadb_metrics
+  SplunkIndexLogs:
+    Type: String
+    Default: mariadb_logs
+  SplunkHecVerifySsl:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Verify the Splunk HEC TLS certificate.
+  MetricsScheduleExpression:
+    Type: String
+    Default: rate(1 minute)
+    Description: EventBridge minimum granularity is 1 minute.
+  LogsScheduleExpression:
+    Type: String
+    Default: rate(5 minutes)
+  MetricsScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: ["ENABLED", "DISABLED"]
+    Description: Set to DISABLED to suspend the metrics schedule.
+  LogsScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: ["ENABLED", "DISABLED"]
+    Description: Set to DISABLED to suspend the logs schedule.
+  MetricsTimeout:
+    Type: Number
+    Default: 120
+  LogsTimeout:
+    Type: Number
+    Default: 300
+  MetricsMaxRuntimeSeconds:
+    Type: Number
+    Default: 270
+    Description: >
+      Soft runtime budget (seconds) for the metrics function. Stops at a safe
+      boundary before the hard timeout; also auto-capped to remaining time.
+  LogsMaxRuntimeSeconds:
+    Type: Number
+    Default: 180
+    Description: >
+      Soft runtime budget (seconds) for the logs function. Stops between
+      archives (after saving the checkpoint) before the hard timeout.
+  MetricsMemorySize:
+    Type: Number
+    Default: 256
+  LogsMemorySize:
+    Type: Number
+    Default: 2048
+    Description: Archive download/parse is memory-heavier than metrics.
+  EnableDlq:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  CheckpointBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Name of the S3 bucket for the logs dedup checkpoint. Empty derives it as
+      <NamePrefix>-checkpoints-<AccountId>. The stack creates this bucket, so
+      the name must not already exist.
+  CheckpointKey:
+    Type: String
+    Default: logs/checkpoint.json
+    Description: S3 object key for the logs dedup checkpoint.
+
+Conditions:
+  HasDlq: !Equals [!Ref EnableDlq, "true"]
+  HasCustomBucketName: !Not [!Equals [!Ref CheckpointBucketName, ""]]
+
+Resources:
+  # ------------------------------------------------------------------ #
+  # Durable checkpoint store for the (stateful) logs collector
+  # ------------------------------------------------------------------ #
+  CheckpointBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !If
+        - HasCustomBucketName
+        - !Ref CheckpointBucketName
+        - !Sub "${NamePrefix}-checkpoints-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ------------------------------------------------------------------ #
+  # Optional dead-letter queue for failed scheduled invocations
+  # ------------------------------------------------------------------ #
+  Dlq:
+    Type: AWS::SQS::Queue
+    Condition: HasDlq
+    Properties:
+      QueueName: !Sub "${NamePrefix}-dlq"
+      MessageRetentionPeriod: 1209600
+
+  # ------------------------------------------------------------------ #
+  # Metrics function role
+  # ------------------------------------------------------------------ #
+  MetricsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-metrics-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: read-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref MetricsSecretArn
+
+  # ------------------------------------------------------------------ #
+  # Logs function role
+  # ------------------------------------------------------------------ #
+  LogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-logs-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: logs-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref LogsSecretArn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${CheckpointBucket.Arn}/${CheckpointKey}"
+              # ListBucket so a GetObject on the not-yet-created checkpoint
+              # returns 404 (NoSuchKey) instead of 403 (AccessDenied) on first run.
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt CheckpointBucket.Arn
+
+  # ------------------------------------------------------------------ #
+  # Lambda functions
+  # ------------------------------------------------------------------ #
+  MetricsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${NamePrefix}-metrics"
+      Runtime: !Ref Runtime
+      Handler: mariadb_metrics_collector.lambda_handler
+      Role: !GetAtt MetricsRole.Arn
+      Timeout: !Ref MetricsTimeout
+      MemorySize: !Ref MetricsMemorySize
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref MetricsCodeKey
+      Environment:
+        Variables:
+          SECRETS_ARN: !Ref MetricsSecretArn
+          MARIADB_API_URL: !Ref MariaDbApiUrl
+          SPLUNK_HEC_URL: !Ref SplunkHecUrl
+          SPLUNK_INDEX: !Ref SplunkIndexMetrics
+          SPLUNK_HEC_VERIFY_SSL: !Ref SplunkHecVerifySsl
+          # !Sub stringifies the Number param (Lambda env values must be strings).
+          MAX_RUNTIME_SECONDS: !Sub "${MetricsMaxRuntimeSeconds}"
+
+  LogsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${NamePrefix}-logs"
+      Runtime: !Ref Runtime
+      Handler: mariadb_logs_collector.lambda_handler
+      Role: !GetAtt LogsRole.Arn
+      Timeout: !Ref LogsTimeout
+      MemorySize: !Ref LogsMemorySize
+      # Pin to one concurrent execution: overlapping runs would race the single
+      # S3 checkpoint object (last-writer-wins).
+      ReservedConcurrentExecutions: 1
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref LogsCodeKey
+      Environment:
+        Variables:
+          SECRETS_ARN: !Ref LogsSecretArn
+          MARIADB_API_URL: !Ref MariaDbApiUrl
+          SPLUNK_HEC_URL: !Ref SplunkHecUrl
+          SPLUNK_INDEX: !Ref SplunkIndexLogs
+          SPLUNK_HEC_VERIFY_SSL: !Ref SplunkHecVerifySsl
+          MAX_RUNTIME_SECONDS: !Sub "${LogsMaxRuntimeSeconds}"
+          CHECKPOINT_FILE: !Sub "s3://${CheckpointBucket}/${CheckpointKey}"
+
+  # ------------------------------------------------------------------ #
+  # EventBridge Scheduler: role + schedules
+  # ------------------------------------------------------------------ #
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-scheduler-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-functions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt MetricsFunction.Arn
+                  - !GetAtt LogsFunction.Arn
+
+  SchedulerDlqPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasDlq
+    Properties:
+      PolicyName: scheduler-send-dlq
+      Roles: [!Ref SchedulerRole]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource: !GetAtt Dlq.Arn
+
+  MetricsSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${NamePrefix}-metrics"
+      State: !Ref MetricsScheduleState
+      ScheduleExpression: !Ref MetricsScheduleExpression
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !GetAtt MetricsFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        DeadLetterConfig:
+          !If [HasDlq, { Arn: !GetAtt Dlq.Arn }, !Ref "AWS::NoValue"]
+
+  LogsSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${NamePrefix}-logs"
+      State: !Ref LogsScheduleState
+      ScheduleExpression: !Ref LogsScheduleExpression
+      ScheduleExpressionTimezone: UTC
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Target:
+        Arn: !GetAtt LogsFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        DeadLetterConfig:
+          !If [HasDlq, { Arn: !GetAtt Dlq.Arn }, !Ref "AWS::NoValue"]
+
+Outputs:
+  MetricsFunctionName:
+    Value: !Ref MetricsFunction
+  LogsFunctionName:
+    Value: !Ref LogsFunction
+  CheckpointBucket:
+    Value: !Ref CheckpointBucket
+  CheckpointUri:
+    Value: !Sub "s3://${CheckpointBucket}/${CheckpointKey}"
+  DlqUrl:
+    Condition: HasDlq
+    Value: !Ref Dlq

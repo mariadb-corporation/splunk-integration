@@ -10,10 +10,13 @@ import json
 import time
 import zipfile
 import unittest
+from datetime import datetime
+from unittest import mock
 
 # Add scripts directory to path to import the module
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+import mariadb_logs_collector as mod
 from mariadb_logs_collector import MariaDBLogsCollector
 
 
@@ -260,6 +263,261 @@ class TestCheckpoint(BaseCollectorTest):
         self.assertEqual(
             logs_stat["id-1"]["last_timestamp"], "2026-01-12T11:00:00Z"
         )
+
+
+class _FakeS3:
+    """Minimal in-memory stand-in for a boto3 S3 client."""
+
+    def __init__(self):
+        self.store = {}
+
+    def get_object(self, Bucket, Key):
+        if (Bucket, Key) not in self.store:
+            err = Exception("not found")
+            err.response = {"Error": {"Code": "NoSuchKey"}}
+            raise err
+        return {"Body": io.BytesIO(self.store[(Bucket, Key)])}
+
+    def put_object(self, Bucket, Key, Body, ContentType=None):
+        self.store[(Bucket, Key)] = Body
+
+
+class TestS3Checkpoint(BaseCollectorTest):
+    """The checkpoint backend transparently uses S3 for s3:// locations."""
+
+    def setUp(self):
+        super().setUp()
+        self.collector.checkpoint_file = "s3://my-bucket/mariadb/checkpoint.json"
+        self.fake_s3 = _FakeS3()
+        self.collector._s3 = self.fake_s3  # inject; bypasses lazy boto3 import
+
+    def test_parse_s3_uri(self):
+        self.assertEqual(
+            self.collector._parse_s3_uri("s3://bucket/a/b/c.json"),
+            ("bucket", "a/b/c.json"),
+        )
+
+    def test_parse_s3_uri_rejects_missing_key(self):
+        with self.assertRaises(ValueError):
+            self.collector._parse_s3_uri("s3://bucket-only")
+
+    def test_load_missing_object_returns_empty(self):
+        # No object stored yet (first run) -> empty checkpoint, not an error.
+        self.assertEqual(self.collector.load_checkpoint(), {"logs_stat": {}})
+
+    def test_save_then_load_roundtrip_via_s3(self):
+        logs_stat = {"id-1": {"last_timestamp": "2026-01-12T10:00:00Z"}}
+        self.collector.save_checkpoint(
+            "2026-01-12T00:00:00Z", "2026-01-12T12:00:00Z", logs_stat
+        )
+
+        # Data landed in S3, not on the local filesystem.
+        self.assertIn(("my-bucket", "mariadb/checkpoint.json"), self.fake_s3.store)
+        self.assertFalse(os.path.exists(self.collector.checkpoint_file))
+
+        loaded = self.collector.load_checkpoint()
+        self.assertEqual(
+            loaded["logs_stat"]["id-1"]["last_timestamp"], "2026-01-12T10:00:00Z"
+        )
+
+
+class TestRuntimeDeadline(BaseCollectorTest):
+    """The soft runtime deadline stops the cycle gracefully between archives."""
+
+    def test_compute_deadline_default(self):
+        budget = mod._compute_deadline(None) - time.monotonic()
+        self.assertAlmostEqual(budget, 180, delta=2)
+
+    def test_compute_deadline_capped_by_context(self):
+        class Ctx:
+            def get_remaining_time_in_millis(self):
+                return 60_000  # 60s remaining -> 60 - 30 buffer = 30s budget
+
+        budget = mod._compute_deadline(Ctx()) - time.monotonic()
+        self.assertAlmostEqual(budget, 30, delta=2)
+
+    def test_deadline_reached_helper(self):
+        self.collector._deadline = None
+        self.assertFalse(self.collector._deadline_reached())
+        self.collector._deadline = time.monotonic() - 1
+        self.assertTrue(self.collector._deadline_reached())
+
+    def test_run_stops_gracefully_at_deadline(self):
+        # One page with one archive available, but the deadline is already past.
+        self.collector.load_checkpoint = lambda: {"logs_stat": {}}
+        self.collector.fetch_servers = lambda: {}
+        self.collector.fetch_log_metadata = mock.Mock(
+            return_value={
+                "logs": [{"id": "1", "logType": "error-log", "name": "error.log"}],
+                "count": 1,
+            }
+        )
+        self.collector.fetch_log_archive = mock.Mock()
+        self.collector.send_to_splunk_hec = mock.Mock(return_value=True)
+
+        rc = self.collector.run(deadline=time.monotonic() - 1)
+
+        # Clean early exit (0, not a failure); no archive fetched or sent.
+        self.assertEqual(rc, 0)
+        self.collector.fetch_log_archive.assert_not_called()
+        self.collector.send_to_splunk_hec.assert_not_called()
+
+    def test_checkpoint_persisted_for_sent_archives_before_deadline_exit(self):
+        """The archive sent before the deadline must be in the checkpoint on exit."""
+        cp_path = os.path.join(os.path.dirname(__file__), "_deadline_checkpoint.json")
+        self.collector.checkpoint_file = cp_path  # real local save/load
+        # Recent timestamp so save_checkpoint's 2-day prune keeps the entry.
+        recent = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        try:
+            self.collector.fetch_servers = lambda: {}
+            # Two archives in one page: a1 processed, then the deadline hits at a2.
+            self.collector.fetch_log_metadata = mock.Mock(
+                return_value={
+                    "logs": [
+                        {"id": "a1", "logType": "error-log", "name": "e1.log"},
+                        {"id": "a2", "logType": "error-log", "name": "e2.log"},
+                    ],
+                    "count": 2,
+                }
+            )
+            self.collector.fetch_log_archive = mock.Mock(return_value=b"zip")
+            self.collector.parse_log_archive = mock.Mock(
+                return_value=(
+                    [{"message": "x", "timestamp": recent, "filename": "e1.log",
+                      "log.level": "INFO"}],
+                    recent,
+                )
+            )
+            self.collector.transform_to_hec_events = mock.Mock(
+                return_value=[{"event": "x"}]
+            )
+            self.collector.send_to_splunk_hec = mock.Mock(return_value=True)
+            # Not reached for archive #1, reached before archive #2.
+            self.collector._deadline_reached = mock.Mock(side_effect=[False, True])
+
+            rc = self.collector.run(deadline=time.monotonic() + 1000)
+
+            self.assertEqual(rc, 0)
+            # Exactly one archive sent (a1); a2 was skipped by the deadline.
+            self.assertEqual(self.collector.send_to_splunk_hec.call_count, 1)
+
+            # The checkpoint file exists and records a1 (sent) but not a2 (skipped).
+            self.assertTrue(os.path.exists(cp_path))
+            with open(cp_path) as f:
+                saved = json.load(f)
+            self.assertIn("a1", saved["logs_stat"])
+            self.assertNotIn("a2", saved["logs_stat"])
+            self.assertEqual(saved["logs_stat"]["a1"]["last_timestamp"], recent)
+        finally:
+            if os.path.exists(cp_path):
+                os.remove(cp_path)
+
+    def test_deadline_ignored_for_interactive_daemon_run(self):
+        """run() without a deadline (interactive/daemon) never stops early,
+        even if MAX_RUNTIME_SECONDS is set in the environment."""
+        os.environ["MAX_RUNTIME_SECONDS"] = "1"  # tiny; must have NO effect here
+        recent = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        try:
+            self.collector.load_checkpoint = lambda: {"logs_stat": {}}
+            self.collector.save_checkpoint = mock.Mock()
+            self.collector.fetch_servers = lambda: {}
+            self.collector.fetch_log_metadata = mock.Mock(
+                return_value={
+                    "logs": [
+                        {"id": "a1", "logType": "error-log", "name": "e1.log"},
+                        {"id": "a2", "logType": "error-log", "name": "e2.log"},
+                    ],
+                    "count": 2,
+                }
+            )
+            self.collector.fetch_log_archive = mock.Mock(return_value=b"zip")
+            self.collector.parse_log_archive = mock.Mock(
+                return_value=([{"message": "x", "timestamp": recent}], recent)
+            )
+            self.collector.transform_to_hec_events = mock.Mock(
+                return_value=[{"event": "x"}]
+            )
+            self.collector.send_to_splunk_hec = mock.Mock(return_value=True)
+
+            # Called exactly as main()/run_daemon() do: no deadline argument.
+            rc = self.collector.run()
+
+            self.assertEqual(rc, 0)
+            self.assertIsNone(self.collector._deadline)
+            # BOTH archives sent: the deadline logic did not kick in.
+            self.assertEqual(self.collector.send_to_splunk_hec.call_count, 2)
+        finally:
+            os.environ.pop("MAX_RUNTIME_SECONDS", None)
+
+
+class TestLambdaHandler(unittest.TestCase):
+    """lambda_handler runs one cycle and raises on failure."""
+
+    def setUp(self):
+        os.environ["MARIADB_API_KEY"] = "test-key"
+        os.environ["SPLUNK_HEC_URL"] = "https://test.splunkcloud.com:8088"
+        os.environ["SPLUNK_HEC_TOKEN"] = "test-token"
+        os.environ.pop("SECRETS_ARN", None)  # no Secrets Manager -> no boto3 needed
+
+    def test_success_returns_ok(self):
+        with mock.patch.object(mod.MariaDBLogsCollector, "run", lambda self, deadline=None: 0):
+            self.assertEqual(mod.lambda_handler({}, None), {"status": "ok"})
+
+    def test_failure_raises(self):
+        with mock.patch.object(mod.MariaDBLogsCollector, "run", lambda self, deadline=None: 1):
+            with self.assertRaises(RuntimeError):
+                mod.lambda_handler({}, None)
+
+
+class TestDaemonInterval(unittest.TestCase):
+    """Test that run_daemon enforces the minimum polling interval (5 min)."""
+
+    def setUp(self):
+        os.environ["MARIADB_API_KEY"] = "test-key"
+        os.environ["SPLUNK_HEC_URL"] = "https://test.splunkcloud.com:8088"
+        os.environ["SPLUNK_HEC_TOKEN"] = "test-token"
+        mod.shutdown_requested = False
+
+    def tearDown(self):
+        mod.shutdown_requested = False
+
+    def _run_daemon_capturing_sleeps(self, interval):
+        """Run run_daemon with run()/sleep/signal mocked; return sleep args."""
+        state = {"runs": 0}
+        sleeps = []
+
+        def fake_run(_self):
+            state["runs"] += 1
+            # Request shutdown on the 2nd cycle so the 1st cycle's between-cycle
+            # sleep executes and can be observed, then the loop ends.
+            if state["runs"] >= 2:
+                mod.shutdown_requested = True
+            return 0
+
+        with mock.patch.object(
+            mod.MariaDBLogsCollector, "run", fake_run
+        ), mock.patch.object(
+            mod.time, "sleep", lambda secs: sleeps.append(secs)
+        ), mock.patch.object(mod.signal, "signal"):
+            mod.run_daemon(interval=interval)
+
+        return sleeps, state["runs"]
+
+    def test_sub_minimum_interval_is_clamped(self):
+        """An interval below MIN_INTERVAL must be raised to MIN_INTERVAL."""
+        sleeps, runs = self._run_daemon_capturing_sleeps(interval=60)
+
+        # One completed cycle sleeps MIN_INTERVAL x 1s (clamped up from 60).
+        self.assertEqual(sleeps, [1] * mod.MIN_INTERVAL)
+        self.assertNotIn(0, sleeps)
+        self.assertEqual(runs, 2)
+
+    def test_at_minimum_interval_preserved(self):
+        """The default 300s interval is at the minimum and is preserved."""
+        sleeps, runs = self._run_daemon_capturing_sleeps(interval=mod.MIN_INTERVAL)
+
+        self.assertEqual(sleeps, [1] * mod.MIN_INTERVAL)
+        self.assertEqual(runs, 2)
 
 
 if __name__ == "__main__":

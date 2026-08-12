@@ -37,9 +37,14 @@ class MariaDBLogsCollector:
         # MariaDB Cloud API configuration
         self.api_url = os.environ.get("MARIADB_API_URL", "https://api.skysql.com")
         self.api_key = os.environ.get("MARIADB_API_KEY")
+        # CHECKPOINT_FILE may be a local path (standalone) or an
+        # ``s3://bucket/key`` URI (Lambda, where the local filesystem is
+        # ephemeral). See load_checkpoint/save_checkpoint.
         self.checkpoint_file = os.environ.get(
             "CHECKPOINT_FILE", "./mariadb_checkpoint.json"
         )
+        # Lazily created boto3 S3 client, only when an s3:// checkpoint is used.
+        self._s3 = None
 
         # Splunk HEC configuration
         self.splunk_hec_url = os.environ.get("SPLUNK_HEC_URL")
@@ -47,7 +52,7 @@ class MariaDBLogsCollector:
         self.splunk_index = os.environ.get("SPLUNK_INDEX", "mariadb_logs")
         self.splunk_source = os.environ.get("SPLUNK_SOURCE", "mariadb_logs_api")
         self.splunk_sourcetype = os.environ.get("SPLUNK_SOURCETYPE", "mariadb:logs")
-        self.batch_size = int(os.environ.get("LOGS_BATCH_SIZE", "100"))
+        self.batch_size = int(os.environ.get("LOGS_BATCH_SIZE", "1000"))
         self.max_retries = int(os.environ.get("LOGS_MAX_RETRIES", "3"))
         self.retry_delay = int(os.environ.get("LOGS_RETRY_DELAY", "5"))
         self.verify_ssl = os.environ.get("SPLUNK_HEC_VERIFY_SSL", "true").lower() in (
@@ -56,12 +61,30 @@ class MariaDBLogsCollector:
             "yes",
         )
 
+        # When TLS verification is disabled the user opted out deliberately, so
+        # silence urllib3's per-request "Unverified HTTPS request" warning.
+        if not self.verify_ssl:
+            try:
+                import urllib3
+
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+
         # API endpoints
         self.logs_query_endpoint = f"{self.api_url}/observability/v2/logs/query"
         self.logs_archive_endpoint = f"{self.api_url}/observability/v2/logs/archive"
         self.logs_servers_endpoint = f"{self.api_url}/observability/v2/logs/servers"
 
+        # Optional monotonic deadline (seconds) after which run() stops between
+        # archives. Set per-cycle by run(); None means unbounded (standalone).
+        self._deadline = None
+
         self._validate_config()
+
+    def _deadline_reached(self) -> bool:
+        """True once the soft runtime deadline has passed (see run/lambda_handler)."""
+        return self._deadline is not None and time.monotonic() >= self._deadline
 
     def _validate_config(self):
         """Validate required configuration."""
@@ -80,12 +103,76 @@ class MariaDBLogsCollector:
     # ------------------------------------------------------------------
     # Checkpoint management
     # ------------------------------------------------------------------
+    @staticmethod
+    def _is_s3(path: str) -> bool:
+        """True if the checkpoint location is an s3:// URI."""
+        return isinstance(path, str) and path.startswith("s3://")
+
+    @staticmethod
+    def _parse_s3_uri(uri: str) -> Tuple[str, str]:
+        """Split ``s3://bucket/key`` into ``(bucket, key)``."""
+        bucket, _, key = uri[len("s3://"):].partition("/")
+        if not bucket or not key:
+            raise ValueError(
+                f"Invalid S3 checkpoint URI: {uri!r} (expected s3://bucket/key)"
+            )
+        return bucket, key
+
+    @staticmethod
+    def _is_not_found(exc: Exception) -> bool:
+        """True if an S3 error means the checkpoint object does not exist yet."""
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        return code in ("NoSuchKey", "404") or exc.__class__.__name__ == "NoSuchKey"
+
+    def _s3_client(self):
+        """Return a cached boto3 S3 client (imported lazily)."""
+        if self._s3 is None:
+            import boto3  # lazy: only required for s3:// checkpoints (Lambda)
+
+            self._s3 = boto3.client("s3")
+        return self._s3
+
+    def _read_checkpoint(self) -> Optional[str]:
+        """Read the raw checkpoint JSON, or None if it does not exist yet."""
+        if self._is_s3(self.checkpoint_file):
+            bucket, key = self._parse_s3_uri(self.checkpoint_file)
+            try:
+                resp = self._s3_client().get_object(Bucket=bucket, Key=key)
+            except Exception as e:
+                if self._is_not_found(e):
+                    return None
+                raise
+            return resp["Body"].read().decode("utf-8")
+
+        if os.path.exists(self.checkpoint_file):
+            with open(self.checkpoint_file, "r") as f:
+                return f.read()
+        return None
+
+    def _write_checkpoint(self, payload: str):
+        """Persist the raw checkpoint JSON to S3 or the local file."""
+        if self._is_s3(self.checkpoint_file):
+            bucket, key = self._parse_s3_uri(self.checkpoint_file)
+            self._s3_client().put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=payload.encode("utf-8"),
+                ContentType="application/json",
+            )
+            return
+
+        checkpoint_dir = os.path.dirname(self.checkpoint_file)
+        if checkpoint_dir:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+        with open(self.checkpoint_file, "w") as f:
+            f.write(payload)
+
     def load_checkpoint(self) -> Dict:
         """Load the checkpoint (last-seen timestamp per log archive)."""
         try:
-            if os.path.exists(self.checkpoint_file):
-                with open(self.checkpoint_file, "r") as f:
-                    return json.load(f)
+            raw = self._read_checkpoint()
+            if raw is not None:
+                return json.loads(raw)
         except Exception as e:
             logger.error(f"Failed to load checkpoint: {e}")
 
@@ -117,19 +204,14 @@ class MariaDBLogsCollector:
                     f"Failed to prune stale log_stat entries: {prune_err}"
                 )
 
-            checkpoint_dir = os.path.dirname(self.checkpoint_file)
-            if checkpoint_dir:
-                os.makedirs(checkpoint_dir, exist_ok=True)
-
-            with open(self.checkpoint_file, "w") as f:
-                json.dump(
-                    {
-                        "startTime": start_time,
-                        "endTime": end_time,
-                        "logs_stat": logs_stat,
-                    },
-                    f,
-                )
+            payload = json.dumps(
+                {
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "logs_stat": logs_stat,
+                }
+            )
+            self._write_checkpoint(payload)
         except Exception as e:
             logger.error(f"Failed to save checkpoint: {e}")
 
@@ -476,8 +558,16 @@ class MariaDBLogsCollector:
     # ------------------------------------------------------------------
     # Orchestration
     # ------------------------------------------------------------------
-    def run(self) -> int:
-        """Run a single collection cycle."""
+    def run(self, deadline: Optional[float] = None) -> int:
+        """Run a single collection cycle.
+
+        deadline: optional time.monotonic() value after which the cycle stops
+        between archives (used under Lambda to exit before the hard timeout).
+        The per-archive checkpoint is always saved before stopping, so the next
+        invocation resumes exactly where this one left off. None means run to
+        completion (standalone / daemon).
+        """
+        self._deadline = deadline
         try:
             logger.info("Starting MariaDB Cloud logs collection")
 
@@ -502,6 +592,7 @@ class MariaDBLogsCollector:
             total_logs = 0
             total_sent = 0
             send_failed = False
+            deadline_stop = False
 
             while True:
                 result = self.fetch_log_metadata(
@@ -519,6 +610,17 @@ class MariaDBLogsCollector:
                     break
 
                 for log in logs:
+                    # Stop between archives if approaching the Lambda timeout.
+                    # Every already-sent archive has its checkpoint saved, so the
+                    # next invocation resumes cleanly from here.
+                    if self._deadline_reached():
+                        logger.warning(
+                            "Approaching runtime deadline; stopping cycle "
+                            "gracefully (checkpoint saved for sent archives)"
+                        )
+                        deadline_stop = True
+                        break
+
                     if log.get("logType") == "slow-query-log":
                         # TODO: handle slow-query-log separately
                         continue
@@ -562,7 +664,7 @@ class MariaDBLogsCollector:
                     self.save_checkpoint(from_date, to_date, logs_stat)
                     total_sent += len(events)
 
-                if send_failed:
+                if send_failed or deadline_stop:
                     break
 
                 total_logs += len(logs)
@@ -576,6 +678,15 @@ class MariaDBLogsCollector:
 
             if send_failed:
                 return 1
+
+            if deadline_stop:
+                # Not a failure: a clean, checkpointed early exit. The next
+                # scheduled invocation continues from the saved checkpoint.
+                logger.info(
+                    "Logs collection stopped early at runtime deadline; "
+                    "remaining archives will be picked up next cycle"
+                )
+                return 0
 
             logger.info("Logs collection completed successfully")
             return 0
@@ -596,12 +707,26 @@ def signal_handler(signum, frame):
     shutdown_requested = True
 
 
+# Minimum daemon polling interval (seconds). The logs API is not a
+# high-frequency source, so 5 minutes is the floor.
+MIN_INTERVAL = 300
+
+
 def run_daemon(interval: int = 300) -> int:
     """Run logs collection in daemon mode with continuous polling."""
     global shutdown_requested
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+
+    # Enforce a minimum polling interval. The logs API is not a high-frequency
+    # source; polling more often than every 5 minutes adds load without
+    # surfacing new log data.
+    if interval < MIN_INTERVAL:
+        logger.warning(
+            f"Invalid interval {interval}; using minimum of {MIN_INTERVAL} seconds"
+        )
+        interval = MIN_INTERVAL
 
     logger.info(f"Starting daemon mode with {interval} second interval")
     logger.info("Press Ctrl+C to stop gracefully")
@@ -631,6 +756,95 @@ def run_daemon(interval: int = 300) -> int:
     return 0
 
 
+# ----------------------------------------------------------------------
+# AWS Lambda support
+# ----------------------------------------------------------------------
+# Default soft runtime budget (seconds). The collector stops between archives
+# once this elapses, leaving headroom before Lambda's hard timeout, and always
+# after saving the checkpoint. Override with MAX_RUNTIME_SECONDS. Also capped by
+# the Lambda context's actual remaining time (minus LAMBDA_SAFETY_BUFFER_SECONDS).
+MAX_RUNTIME_SECONDS_DEFAULT = "180"
+LAMBDA_SAFETY_BUFFER_SECONDS = 30
+
+# Set once boto3 has resolved the Secrets Manager secret, so warm invocations
+# of the same container do not re-fetch it.
+_secrets_loaded = False
+
+
+def _compute_deadline(context):
+    """Return a time.monotonic() deadline for this invocation.
+
+    Uses MAX_RUNTIME_SECONDS (default 270s), but never runs closer than
+    LAMBDA_SAFETY_BUFFER_SECONDS to the Lambda context's actual remaining time,
+    so it adapts to whatever timeout the function is configured with.
+    """
+    max_runtime = int(os.environ.get("MAX_RUNTIME_SECONDS", MAX_RUNTIME_SECONDS_DEFAULT))
+    if context is not None and hasattr(context, "get_remaining_time_in_millis"):
+        remaining = context.get_remaining_time_in_millis() / 1000.0
+        max_runtime = min(max_runtime, remaining - LAMBDA_SAFETY_BUFFER_SECONDS)
+    return time.monotonic() + max(1, max_runtime)
+
+
+def _load_secrets_from_manager():
+    """Populate secret env vars from AWS Secrets Manager (Lambda only).
+
+    Controlled by the ``SECRETS_ARN`` env var: the ARN or name of a Secrets
+    Manager secret whose ``SecretString`` is a JSON object with keys such as
+    ``MARIADB_API_KEY`` / ``SPLUNK_HEC_TOKEN``. Fetched once per container
+    (cold start) and cached. Values already present in the environment are
+    NOT overwritten, so an explicit env var still wins.
+
+    boto3 is imported lazily so standalone/non-AWS environments (and the unit
+    tests) never need it installed. A no-op when ``SECRETS_ARN`` is unset.
+    """
+    global _secrets_loaded
+    secret_ref = os.environ.get("SECRETS_ARN")
+    if _secrets_loaded or not secret_ref:
+        return
+
+    try:
+        import boto3  # lazy: only required under Lambda
+    except ImportError:
+        logger.warning("SECRETS_ARN set but boto3 is unavailable; skipping secret load")
+        return
+
+    resp = boto3.client("secretsmanager").get_secret_value(SecretId=secret_ref)
+    raw = resp.get("SecretString")
+    if not raw:
+        logger.warning(f"Secret {secret_ref} has no SecretString; skipping")
+        _secrets_loaded = True
+        return
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError(f"Secret {secret_ref} is not valid JSON")
+
+    for key, value in data.items():
+        # Do not clobber values explicitly provided via the environment.
+        os.environ.setdefault(key, str(value))
+    _secrets_loaded = True
+    logger.info(f"Loaded {len(data)} value(s) from Secrets Manager")
+
+
+def lambda_handler(event, context):
+    """AWS Lambda entry point.
+
+    Runs a single collection cycle — no daemon loop, since the schedule is
+    provided by EventBridge. Raises on failure so Lambda records the
+    invocation as errored (enabling automatic retries / a DLQ). Returns a
+    small status summary only; log data is never returned here.
+
+    The dedup checkpoint must live in a durable store across invocations —
+    set CHECKPOINT_FILE to an ``s3://bucket/key`` URI (see load_checkpoint).
+    """
+    _load_secrets_from_manager()
+    exit_code = MariaDBLogsCollector().run(deadline=_compute_deadline(context))
+    if exit_code != 0:
+        raise RuntimeError(f"Logs collection failed with exit code {exit_code}")
+    return {"status": "ok"}
+
+
 def main():
     """Entry point with CLI argument parsing."""
     parser = argparse.ArgumentParser(
@@ -652,7 +866,7 @@ Environment variables:
   SPLUNK_INDEX            Target index (default: mariadb_logs)
   SPLUNK_SOURCE           Source field (default: mariadb_logs_api)
   SPLUNK_SOURCETYPE       Sourcetype field (default: mariadb:logs)
-  LOGS_BATCH_SIZE         Events per HEC batch (default: 100)
+  LOGS_BATCH_SIZE         Events per HEC batch (default: 1000)
   LOGS_MAX_RETRIES        Max retry attempts (default: 3)
   LOGS_RETRY_DELAY        Retry delay in seconds (default: 5)
 
@@ -674,7 +888,7 @@ Examples:
         "--interval",
         type=int,
         default=300,
-        help="Polling interval in seconds for daemon mode (default: 300)",
+        help="Polling interval in seconds for daemon mode (default: 300, minimum: 300)",
     )
     parser.add_argument(
         "--verbose",

@@ -92,7 +92,7 @@ export SPLUNK_HEC_TOKEN="your-splunk-hec-token"
 | `SPLUNK_INDEX` | No | `mariadb_metrics` | Target Splunk index (must be a **Metrics-type** index) |
 | `SPLUNK_SOURCE` | No | `mariadbl_metrics_api` | Source identifier |
 | `SPLUNK_SOURCETYPE` | No | `metrics` | Source type |
-| `METRICS_BATCH_SIZE` | No | `100` | Number of events per HEC batch |
+| `METRICS_BATCH_SIZE` | No | `1000` | Number of events per HEC batch |
 | `METRICS_MAX_RETRIES` | No | `3` | Maximum retry attempts |
 | `METRICS_RETRY_DELAY` | No | `5` | Retry delay in seconds |
 
@@ -117,7 +117,7 @@ export SPLUNK_HEC_TOKEN="your-splunk-hec-token"
 
 **CLI Options:**
 - `--daemon`: Run continuously (polling loop)
-- `--interval N`: Polling interval in seconds (default: 60)
+- `--interval N`: Polling interval in seconds (default: 60, minimum: 30 — lower values are clamped to 30)
 - `--verbose`: Enable DEBUG logging (e.g. Prometheus line-parse failures)
 
 ```bash
@@ -172,7 +172,20 @@ kubectl logs -f deployment/mariadb-metrics-collector -n mariadb-monitoring
 
 **Configuration:** Deployment runs in daemon mode with configurable interval via ConfigMap.
 
-### Option 4: Standalone Execution (Testing)
+### Option 4: AWS Lambda (Scheduled) ⭐
+
+Run the collector as a scheduled AWS Lambda function invoked by EventBridge
+Scheduler. The metrics collector is stateless, so this needs no external state.
+See **[../deploy/lambda/LAMBDA.md](../deploy/lambda/LAMBDA.md)** for the build
+script, Terraform / CloudFormation stacks, and Secrets Manager setup.
+
+```bash
+deploy/lambda/build.sh   # produces deploy/lambda/dist/metrics_lambda.zip
+```
+
+Handler: `mariadb_metrics_collector.lambda_handler`.
+
+### Option 5: Standalone Execution (Testing)
 
 Run manually for testing:
 
@@ -184,7 +197,7 @@ python3 metrics/scripts/mariadb_metrics_collector.py
 ./metrics/scripts/mariadb_metrics_wrapper.sh
 ```
 
-### Option 5: Cron Job (Legacy)
+### Option 6: Cron Job (Legacy)
 
 **Note:** Daemon mode is recommended over cron.
 

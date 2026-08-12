@@ -32,7 +32,7 @@ data:
   SPLUNK_SOURCE: "mariadb_logs_api"
   SPLUNK_SOURCETYPE: "mariadb:logs"
   CHECKPOINT_FILE: "/data/mariadb_checkpoint.json"
-  LOGS_BATCH_SIZE: "100"
+  LOGS_BATCH_SIZE: "1000"
   COLLECTION_INTERVAL: "300"
 
 ---

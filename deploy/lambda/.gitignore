@@ -1,0 +1,18 @@
+# Build artifacts produced by build.sh
+dist/
+
+# Terraform state / local dirs
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+
+# Real tfvars carry environment-specific ARNs; keep the .example committed.
+terraform/*.tfvars
+!terraform/*.tfvars.example
+
+# Real CloudFormation parameter files; keep the .example committed.
+cloudformation/parameters.json
+
+# Packaged CloudFormation templates
+cloudformation/packaged.yaml

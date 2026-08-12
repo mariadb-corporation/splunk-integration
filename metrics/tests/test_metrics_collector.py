@@ -6,6 +6,7 @@ Unit tests for Prometheus format parser in MariaDB metrics collector
 import unittest
 import sys
 import os
+import time
 from unittest import mock
 
 # Add parent directory to path to import the module
@@ -388,7 +389,7 @@ class TestConfigValidation(unittest.TestCase):
     def test_defaults_when_unset(self):
         """Unset numeric vars fall back to their defaults."""
         collector = MetricsCollector()
-        self.assertEqual(collector.batch_size, 100)
+        self.assertEqual(collector.batch_size, 1000)
         self.assertEqual(collector.max_retries, 3)
         self.assertEqual(collector.retry_delay, 5)
 
@@ -456,23 +457,174 @@ class TestDaemonInterval(unittest.TestCase):
 
         return sleeps, state["runs"]
 
-    def test_zero_interval_is_clamped_and_does_not_busy_loop(self):
-        """interval=0 must be clamped to a 1s sleep, not skip sleeping."""
+    def test_sub_minimum_interval_is_clamped(self):
+        """An interval below MIN_INTERVAL must be raised to MIN_INTERVAL."""
         sleeps, runs = self._run_daemon_capturing_sleeps(interval=0)
 
-        # The between-cycle sleep must have run at 1s (clamped), never 0s.
-        self.assertIn(1, sleeps)
+        # One completed cycle sleeps MIN_INTERVAL x 1s, all increments 1s
+        # (clamped), never 0s — no busy loop.
+        self.assertEqual(sleeps, [1] * mod.MIN_INTERVAL)
         self.assertNotIn(0, sleeps)
         # Only the two cycles we allowed ran — no runaway looping.
         self.assertEqual(runs, 2)
 
     def test_positive_interval_preserved(self):
-        """A normal interval sleeps in 1s increments up to the interval."""
-        sleeps, runs = self._run_daemon_capturing_sleeps(interval=3)
+        """An interval at/above MIN_INTERVAL sleeps in 1s increments up to it."""
+        interval = mod.MIN_INTERVAL + 15
+        sleeps, runs = self._run_daemon_capturing_sleeps(interval=interval)
 
-        # One completed cycle sleeps 3 x 1s before the shutdown-ending cycle.
-        self.assertEqual(sleeps, [1, 1, 1])
+        # One completed cycle sleeps `interval` x 1s before the ending cycle.
+        self.assertEqual(sleeps, [1] * interval)
         self.assertEqual(runs, 2)
+
+
+class _FakeContext:
+    """Stand-in for the Lambda context object."""
+
+    def __init__(self, remaining_ms):
+        self._remaining_ms = remaining_ms
+
+    def get_remaining_time_in_millis(self):
+        return self._remaining_ms
+
+
+class TestRuntimeDeadline(unittest.TestCase):
+    """The soft runtime deadline halts sending before the Lambda hard timeout."""
+
+    def setUp(self):
+        os.environ["MARIADB_API_KEY"] = "test-key"
+        os.environ["SPLUNK_HEC_URL"] = "https://test.splunkcloud.com:8088"
+        os.environ["SPLUNK_HEC_TOKEN"] = "test-token"
+        os.environ.pop("MAX_RUNTIME_SECONDS", None)
+
+    def tearDown(self):
+        os.environ.pop("MAX_RUNTIME_SECONDS", None)
+
+    def test_deadline_defaults_to_270(self):
+        # No context -> falls back to the 270s default budget.
+        budget = mod._compute_deadline(None) - time.monotonic()
+        self.assertAlmostEqual(budget, 270, delta=2)
+
+    def test_deadline_capped_by_context_remaining(self):
+        # 300s timeout: 270 default is under (remaining - 30s buffer) = 270.
+        budget = mod._compute_deadline(_FakeContext(300_000)) - time.monotonic()
+        self.assertAlmostEqual(budget, 270, delta=2)
+
+    def test_short_timeout_shrinks_budget(self):
+        # 60s remaining -> capped to 60 - 30 = 30s, below the 270 default.
+        budget = mod._compute_deadline(_FakeContext(60_000)) - time.monotonic()
+        self.assertAlmostEqual(budget, 30, delta=2)
+
+    def test_env_override_respected(self):
+        os.environ["MAX_RUNTIME_SECONDS"] = "100"
+        budget = mod._compute_deadline(_FakeContext(600_000)) - time.monotonic()
+        self.assertAlmostEqual(budget, 100, delta=2)
+
+    def test_deadline_reached_helper(self):
+        c = MetricsCollector()
+        c._deadline = None
+        self.assertFalse(c._deadline_reached())
+        c._deadline = time.monotonic() + 100
+        self.assertFalse(c._deadline_reached())
+        c._deadline = time.monotonic() - 1
+        self.assertTrue(c._deadline_reached())
+
+    def test_send_stops_at_deadline_without_http(self):
+        c = MetricsCollector()
+        c._deadline = time.monotonic() - 1  # already past
+        with mock.patch.object(mod.requests, "post") as post:
+            result = c.send_to_splunk_hec([{"event": "metric"}])
+        # Clean early stop (not a failure) and no HTTP was attempted.
+        self.assertTrue(result)
+        post.assert_not_called()
+
+    def test_deadline_ignored_for_interactive_daemon_run(self):
+        """With no deadline (interactive/daemon), MAX_RUNTIME_SECONDS has no
+        effect and every batch is sent."""
+        os.environ["MAX_RUNTIME_SECONDS"] = "1"  # tiny; must NOT apply here
+        try:
+            c = MetricsCollector()
+            c.batch_size = 1
+            c._deadline = None  # the state run() sets when called without a deadline
+            events = [{"event": f"e{i}"} for i in range(3)]
+            ok = mock.Mock(status_code=200)
+            ok.json.return_value = {"code": 0}
+            with mock.patch.object(mod.requests, "post", return_value=ok) as post:
+                result = c.send_to_splunk_hec(events)
+            self.assertTrue(result)
+            # All three batches sent: the deadline logic never engaged.
+            self.assertEqual(post.call_count, 3)
+        finally:
+            os.environ.pop("MAX_RUNTIME_SECONDS", None)
+
+
+class TestLambdaHandler(unittest.TestCase):
+    """lambda_handler runs one cycle and raises on failure."""
+
+    def setUp(self):
+        os.environ["MARIADB_API_KEY"] = "test-key"
+        os.environ["SPLUNK_HEC_URL"] = "https://test.splunkcloud.com:8088"
+        os.environ["SPLUNK_HEC_TOKEN"] = "test-token"
+        os.environ.pop("SECRETS_ARN", None)  # no Secrets Manager -> no boto3 needed
+        mod._secrets_loaded = False
+
+    def test_success_returns_ok(self):
+        with mock.patch.object(mod.MetricsCollector, "run", lambda self, deadline=None: 0):
+            self.assertEqual(mod.lambda_handler({}, None), {"status": "ok"})
+
+    def test_failure_raises(self):
+        with mock.patch.object(mod.MetricsCollector, "run", lambda self, deadline=None: 1):
+            with self.assertRaises(RuntimeError):
+                mod.lambda_handler({}, None)
+
+    def test_secrets_loader_noop_without_arn(self):
+        # With SECRETS_ARN unset, the loader must not touch boto3 at all.
+        mod._load_secrets_from_manager()  # would raise if it tried to import/use boto3
+
+
+class TestSecretsLoader(unittest.TestCase):
+    """_load_secrets_from_manager injects secret env vars without clobbering."""
+
+    def setUp(self):
+        os.environ["SECRETS_ARN"] = "arn:aws:secretsmanager:us-east-1:1:secret:x"
+        mod._secrets_loaded = False
+        for key in ("MARIADB_API_KEY", "SPLUNK_HEC_TOKEN"):
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        os.environ.pop("SECRETS_ARN", None)
+        mod._secrets_loaded = False
+
+    def _patched_boto3(self, secret_string):
+        """Return a fake boto3 module whose SM client yields secret_string."""
+        fake_client = mock.Mock()
+        fake_client.get_secret_value.return_value = {"SecretString": secret_string}
+        fake_boto3 = mock.Mock()
+        fake_boto3.client.return_value = fake_client
+        return fake_boto3
+
+    def test_injects_secret_values(self):
+        fake_boto3 = self._patched_boto3(
+            '{"MARIADB_API_KEY": "real-key", "SPLUNK_HEC_TOKEN": "real-token"}'
+        )
+        with mock.patch.dict("sys.modules", {"boto3": fake_boto3}):
+            mod._load_secrets_from_manager()
+        self.assertEqual(os.environ["MARIADB_API_KEY"], "real-key")
+        self.assertEqual(os.environ["SPLUNK_HEC_TOKEN"], "real-token")
+
+    def test_existing_env_var_is_not_clobbered(self):
+        os.environ["MARIADB_API_KEY"] = "explicit-key"
+        fake_boto3 = self._patched_boto3('{"MARIADB_API_KEY": "secret-key"}')
+        with mock.patch.dict("sys.modules", {"boto3": fake_boto3}):
+            mod._load_secrets_from_manager()
+        # Explicit env var wins over the secret value.
+        self.assertEqual(os.environ["MARIADB_API_KEY"], "explicit-key")
+
+    def test_invalid_json_raises(self):
+        fake_boto3 = self._patched_boto3("not-json")
+        with mock.patch.dict("sys.modules", {"boto3": fake_boto3}):
+            with self.assertRaises(ValueError):
+                mod._load_secrets_from_manager()
 
 
 if __name__ == "__main__":
