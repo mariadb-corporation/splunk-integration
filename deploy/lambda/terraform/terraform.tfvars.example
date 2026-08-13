@@ -1,0 +1,70 @@
+# Example variable values for the MariaDB Cloud -> Splunk Lambda stack.
+#
+# Copy this file to terraform.tfvars and fill in the required values:
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored (it names your environment-specific ARNs);
+# this .example file is safe to commit.
+
+# ---------------------------------------------------------------------------
+# REQUIRED — no defaults; Terraform will prompt if these are missing.
+# ---------------------------------------------------------------------------
+
+# Secrets Manager ARNs. Each secret's value must be a JSON object such as:
+#   {"MARIADB_API_KEY": "...", "SPLUNK_HEC_TOKEN": "..."}
+# You may point both at the same secret if you prefer a single one.
+metrics_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:mariadb-splunk/metrics-AbCdEf"
+logs_secret_arn    = "arn:aws:secretsmanager:us-east-1:111122223333:secret:mariadb-splunk/logs-AbCdEf"
+
+# Splunk HEC endpoint URL (without the /services/collector path).
+splunk_hec_url = "https://inputs.your-instance.splunkcloud.com:8088"
+
+# ---------------------------------------------------------------------------
+# OPTIONAL — shown with their defaults; uncomment to override.
+# ---------------------------------------------------------------------------
+
+# aws_region  = "us-east-1"
+# name_prefix = "mariadb-splunk"
+# runtime     = "python3.12"
+
+# Deployment packages produced by ../build.sh (paths are relative to this dir).
+# metrics_zip = "../dist/metrics_lambda.zip"
+# logs_zip    = "../dist/logs_lambda.zip"
+
+# MariaDB Cloud API base URL (leave as-is unless you have a private endpoint).
+# mariadb_api_url = "https://api.skysql.com"
+
+# Splunk indexes. The metrics index MUST be a Metrics-type index.
+# splunk_index_metrics = "mariadb_metrics"
+# splunk_index_logs    = "mariadb_logs"
+
+# Verify the Splunk HEC TLS certificate ("true"/"false").
+# splunk_hec_verify_ssl = "true"
+
+# Schedules. EventBridge Scheduler's finest granularity is 1 minute, so the
+# metrics collector's 30s standalone floor is not reachable from a schedule.
+# metrics_schedule = "rate(1 minute)"
+# logs_schedule    = "rate(5 minutes)"
+
+# Suspend a schedule without tearing anything down: set to "DISABLED".
+# metrics_schedule_state = "ENABLED"
+# logs_schedule_state    = "ENABLED"
+
+# Function sizing.
+# metrics_timeout     = 120    # seconds (Lambda hard timeout)
+# logs_timeout        = 300    # seconds (archive download/parse can be slow)
+# metrics_memory_size = 256    # MB
+# logs_memory_size    = 2048   # MB (archive download/parse is memory-heavier)
+
+# Soft runtime budget per function: stop at a safe boundary this many seconds
+# in, before the hard timeout. Auto-capped to each function's remaining time.
+# metrics_max_runtime_seconds = 270
+# logs_max_runtime_seconds    = 180
+
+# Create an SQS dead-letter queue for failed scheduled invocations.
+# enable_dlq = true
+
+# Logs checkpoint storage. Leave checkpoint_bucket empty to derive the name as
+# "<name_prefix>-checkpoints-<account_id>"; the stack creates the bucket.
+# checkpoint_bucket = ""
+# checkpoint_key    = "logs/checkpoint.json"

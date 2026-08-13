@@ -39,7 +39,7 @@ class MetricsCollector:
         self.splunk_index = os.environ.get("SPLUNK_INDEX", "mariadb_metrics")
         self.splunk_source = os.environ.get("SPLUNK_SOURCE", "mariadbl_metrics_api")
         self.splunk_sourcetype = os.environ.get("SPLUNK_SOURCETYPE", "metrics")
-        self.batch_size = self._int_env("METRICS_BATCH_SIZE", "100", minimum=1)
+        self.batch_size = self._int_env("METRICS_BATCH_SIZE", "1000", minimum=1)
         self.max_retries = self._int_env("METRICS_MAX_RETRIES", "3", minimum=1)
         self.retry_delay = self._int_env("METRICS_RETRY_DELAY", "5", minimum=0)
         self.verify_ssl = os.environ.get("SPLUNK_HEC_VERIFY_SSL", "true").lower() in (
@@ -48,7 +48,25 @@ class MetricsCollector:
             "yes",
         )
 
+        # When TLS verification is disabled the user opted out deliberately, so
+        # silence urllib3's per-request "Unverified HTTPS request" warning.
+        if not self.verify_ssl:
+            try:
+                import urllib3
+
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+
+        # Optional monotonic deadline (seconds) after which run() stops at a safe
+        # boundary. Set per-cycle by run(); None means unbounded (standalone).
+        self._deadline = None
+
         self._validate_config()
+
+    def _deadline_reached(self) -> bool:
+        """True once the soft runtime deadline has passed (see run/lambda_handler)."""
+        return self._deadline is not None and time.monotonic() >= self._deadline
 
     @staticmethod
     def _int_env(name: str, default: str, minimum: Optional[int] = None) -> int:
@@ -336,6 +354,16 @@ class MetricsCollector:
         sent_count = 0
 
         for i in range(0, total_events, self.batch_size):
+            # Stop at a batch boundary if we are approaching the Lambda timeout.
+            # Metrics are stateless (re-polled next cycle), so a truncated send
+            # is a clean early exit, not a failure.
+            if self._deadline_reached():
+                logger.warning(
+                    f"Approaching runtime deadline; stopping after "
+                    f"{sent_count}/{total_events} events"
+                )
+                return True
+
             batch = events[i : i + self.batch_size]
             batch_num = (i // self.batch_size) + 1
             total_batches = (total_events + self.batch_size - 1) // self.batch_size
@@ -400,8 +428,14 @@ class MetricsCollector:
         )
         return sent_count == total_events
 
-    def run(self) -> int:
-        """Main execution flow"""
+    def run(self, deadline: Optional[float] = None) -> int:
+        """Main execution flow.
+
+        deadline: optional time.monotonic() value after which the send loop
+        stops at a batch boundary (used under Lambda to exit before the hard
+        timeout). None means run to completion (standalone / daemon).
+        """
+        self._deadline = deadline
         try:
             logger.info("Starting MariaDB Cloud metrics collection")
 
@@ -441,6 +475,12 @@ def signal_handler(signum, frame):
     shutdown_requested = True
 
 
+# Minimum daemon polling interval (seconds). The MariaDB Cloud metrics
+# counters refresh on roughly a 60s cadence; polling faster than 30s only
+# re-ingests duplicate points at extra DPM cost.
+MIN_INTERVAL = 30
+
+
 def run_daemon(interval=60):
     """Run metrics collection in daemon mode with continuous polling"""
     global shutdown_requested
@@ -449,13 +489,14 @@ def run_daemon(interval=60):
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Guard against a zero/negative interval, which would skip the sleep loop
-    # entirely and busy-loop the API/HEC calls (pinning CPU, risking rate limits).
-    if interval < 1:
+    # Enforce a minimum polling interval. Below MIN_INTERVAL the collector
+    # re-ingests counters faster than the upstream API refreshes them (wasted
+    # DPM) and risks pinning CPU / hitting rate limits.
+    if interval < MIN_INTERVAL:
         logger.warning(
-            f"Invalid interval {interval}; using minimum of 1 second"
+            f"Invalid interval {interval}; using minimum of {MIN_INTERVAL} seconds"
         )
-        interval = 1
+        interval = MIN_INTERVAL
 
     logger.info(f"Starting daemon mode with {interval} second interval")
     logger.info("Press Ctrl+C to stop gracefully")
@@ -488,6 +529,93 @@ def run_daemon(interval=60):
     return 0
 
 
+# ----------------------------------------------------------------------
+# AWS Lambda support
+# ----------------------------------------------------------------------
+# Default soft runtime budget (seconds). The collector stops at a safe boundary
+# once this elapses, leaving headroom before Lambda's hard timeout. Override
+# with MAX_RUNTIME_SECONDS. Also capped by the actual remaining time reported by
+# the Lambda context (minus LAMBDA_SAFETY_BUFFER_SECONDS).
+MAX_RUNTIME_SECONDS_DEFAULT = "270"
+LAMBDA_SAFETY_BUFFER_SECONDS = 30
+
+# Set once boto3 has resolved the Secrets Manager secret, so warm invocations
+# of the same container do not re-fetch it.
+_secrets_loaded = False
+
+
+def _compute_deadline(context):
+    """Return a time.monotonic() deadline for this invocation.
+
+    Uses MAX_RUNTIME_SECONDS (default 270s), but never runs closer than
+    LAMBDA_SAFETY_BUFFER_SECONDS to the Lambda context's actual remaining time,
+    so it adapts automatically to whatever timeout the function is configured
+    with (e.g. a shorter metrics timeout).
+    """
+    max_runtime = int(os.environ.get("MAX_RUNTIME_SECONDS", MAX_RUNTIME_SECONDS_DEFAULT))
+    if context is not None and hasattr(context, "get_remaining_time_in_millis"):
+        remaining = context.get_remaining_time_in_millis() / 1000.0
+        max_runtime = min(max_runtime, remaining - LAMBDA_SAFETY_BUFFER_SECONDS)
+    return time.monotonic() + max(1, max_runtime)
+
+
+def _load_secrets_from_manager():
+    """Populate secret env vars from AWS Secrets Manager (Lambda only).
+
+    Controlled by the ``SECRETS_ARN`` env var: the ARN or name of a Secrets
+    Manager secret whose ``SecretString`` is a JSON object with keys such as
+    ``MARIADB_API_KEY`` / ``SPLUNK_HEC_TOKEN``. Fetched once per container
+    (cold start) and cached. Values already present in the environment are
+    NOT overwritten, so an explicit env var still wins.
+
+    boto3 is imported lazily so standalone/non-AWS environments (and the unit
+    tests) never need it installed. A no-op when ``SECRETS_ARN`` is unset.
+    """
+    global _secrets_loaded
+    secret_ref = os.environ.get("SECRETS_ARN")
+    if _secrets_loaded or not secret_ref:
+        return
+
+    try:
+        import boto3  # lazy: only required under Lambda
+    except ImportError:
+        logger.warning("SECRETS_ARN set but boto3 is unavailable; skipping secret load")
+        return
+
+    resp = boto3.client("secretsmanager").get_secret_value(SecretId=secret_ref)
+    raw = resp.get("SecretString")
+    if not raw:
+        logger.warning(f"Secret {secret_ref} has no SecretString; skipping")
+        _secrets_loaded = True
+        return
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError(f"Secret {secret_ref} is not valid JSON")
+
+    for key, value in data.items():
+        # Do not clobber values explicitly provided via the environment.
+        os.environ.setdefault(key, str(value))
+    _secrets_loaded = True
+    logger.info(f"Loaded {len(data)} value(s) from Secrets Manager")
+
+
+def lambda_handler(event, context):
+    """AWS Lambda entry point.
+
+    Runs a single collection cycle — no daemon loop, since the schedule is
+    provided by EventBridge. Raises on failure so Lambda records the
+    invocation as errored (enabling automatic retries / a DLQ). Returns a
+    small status summary only; event/metric data is never returned here.
+    """
+    _load_secrets_from_manager()
+    exit_code = MetricsCollector().run(deadline=_compute_deadline(context))
+    if exit_code != 0:
+        raise RuntimeError(f"Metrics collection failed with exit code {exit_code}")
+    return {"status": "ok"}
+
+
 def main():
     """Entry point with CLI argument parsing"""
     parser = argparse.ArgumentParser(
@@ -508,7 +636,7 @@ Environment variables:
   SPLUNK_INDEX            Target index (default: mariadb_metrics)
   SPLUNK_SOURCE           Source field (default: mariadbl_metrics_api)
   SPLUNK_SOURCETYPE       Sourcetype field (default: metrics)
-  METRICS_BATCH_SIZE      Events per HEC batch (default: 100)
+  METRICS_BATCH_SIZE      Events per HEC batch (default: 1000)
   METRICS_MAX_RETRIES     Max retry attempts (default: 3)
   METRICS_RETRY_DELAY     Retry delay in seconds (default: 5)
 
@@ -532,7 +660,7 @@ Examples:
         "--interval",
         type=int,
         default=60,
-        help="Polling interval in seconds for daemon mode (default: 60)",
+        help="Polling interval in seconds for daemon mode (default: 60, minimum: 30)",
     )
 
     parser.add_argument(

@@ -30,6 +30,11 @@ python3 logs/scripts/mariadb_logs_collector.py --daemon --interval 300
 
 For a persistent service (systemd/launchd/Kubernetes), see [`examples/`](examples/).
 
+To run on **AWS Lambda** (scheduled via EventBridge), see
+[`../deploy/lambda/LAMBDA.md`](../deploy/lambda/LAMBDA.md). Under Lambda the
+dedup checkpoint lives in S3 — set `CHECKPOINT_FILE` to an `s3://bucket/key`
+URI. Handler: `mariadb_logs_collector.lambda_handler`.
+
 ## Configuration
 
 The collector is configured entirely through environment variables:
@@ -45,7 +50,7 @@ The collector is configured entirely through environment variables:
 | `SPLUNK_SOURCE` | No | `mariadb_logs_api` | Source identifier |
 | `SPLUNK_SOURCETYPE` | No | `mariadb:logs` | Source type |
 | `CHECKPOINT_FILE` | No | `./mariadb_checkpoint.json` | Dedup checkpoint path (use a durable location) |
-| `LOGS_BATCH_SIZE` | No | `100` | Events per HEC batch |
+| `LOGS_BATCH_SIZE` | No | `1000` | Events per HEC batch |
 | `LOGS_MAX_RETRIES` | No | `3` | Max retry attempts |
 | `LOGS_RETRY_DELAY` | No | `5` | Retry delay in seconds |
 
@@ -233,7 +238,8 @@ pip3 install requests
 
 ### Change Polling Interval
 
-Pass `--interval <seconds>` in daemon mode (or set it in your systemd/launchd unit):
+Pass `--interval <seconds>` in daemon mode (or set it in your systemd/launchd unit).
+The minimum is 300 seconds (5 minutes); lower values are clamped to 300:
 
 ```bash
 python3 logs/scripts/mariadb_logs_collector.py --daemon --interval 600   # every 10 min

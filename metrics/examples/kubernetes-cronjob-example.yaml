@@ -33,7 +33,7 @@ data:
   SPLUNK_INDEX: "mariadb_metrics"
   SPLUNK_SOURCE: "mariadbl_metrics_api"
   SPLUNK_SOURCETYPE: "metrics"
-  METRICS_BATCH_SIZE: "100"
+  METRICS_BATCH_SIZE: "1000"
   METRICS_MAX_RETRIES: "3"
   METRICS_RETRY_DELAY: "5"
 

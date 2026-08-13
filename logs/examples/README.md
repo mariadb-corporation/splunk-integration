@@ -31,7 +31,7 @@ python3 ../scripts/mariadb_logs_collector.py --daemon --interval 300
 
 **CLI Options:**
 - `--daemon`: Enable daemon mode (continuous polling)
-- `--interval N`: Polling interval in seconds (default: 300)
+- `--interval N`: Polling interval in seconds (default: 300, minimum: 300 — lower values are clamped)
 - `--verbose`: Enable DEBUG logging (e.g. per-archive dedup skip counts)
 
 **Best for:** Continuous monitoring, all environments
@@ -103,7 +103,7 @@ actual credentials:
 | `your-splunk-hec-token` | Your Splunk HEC token | Splunk Cloud → Settings → Data Inputs → HTTP Event Collector |
 | `https://inputs.your-instance.splunkcloud.com:8088` | Your Splunk HEC URL | Splunk Cloud → Settings → Data Inputs → HTTP Event Collector |
 | `/path/to/splunk-integration` | Actual installation path | Where you cloned this repository (logs scripts are in `logs/scripts/`) |
-| `300` (interval) | Polling interval in seconds | How often to collect logs (default: 300) |
+| `300` (interval) | Polling interval in seconds | How often to collect logs (default: 300, minimum: 300) |
 
 ## The Checkpoint File
 

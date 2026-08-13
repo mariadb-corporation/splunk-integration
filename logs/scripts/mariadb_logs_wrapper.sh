@@ -21,7 +21,7 @@ export SPLUNK_SOURCE="${SPLUNK_SOURCE:-mariadb_logs_api}"
 export SPLUNK_SOURCETYPE="${SPLUNK_SOURCETYPE:-mariadb:logs}"
 
 # Logs Collection Configuration
-export LOGS_BATCH_SIZE="${LOGS_BATCH_SIZE:-100}"
+export LOGS_BATCH_SIZE="${LOGS_BATCH_SIZE:-1000}"
 export LOGS_MAX_RETRIES="${LOGS_MAX_RETRIES:-3}"
 export LOGS_RETRY_DELAY="${LOGS_RETRY_DELAY:-5}"
 
